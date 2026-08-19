@@ -7,64 +7,91 @@ import VerifySummary from '@/components/VerifySummary.vue'
 import CoverageStatistics from '@/components/CoverageStatistics.vue'
 import ResultDownload from '@/components/ResultDownload.vue'
 import ExceptionDrawer from '@/components/ExceptionDrawer.vue'
-import { initialTask, successfulTask } from '@/api/reconciliation'
+import { initialTask, uploadReconciliationFiles } from '@/api/reconciliation'
 import type { ReconciliationTask } from '@/types/reconciliation'
 
 const task = reactive<ReconciliationTask>(structuredClone(initialTask))
 const month = ref('2026-07')
 const running = ref(false)
 const drawerOpen = ref(false)
+const aFileObject = ref<File | null>(null)
+const bFileObject = ref<File | null>(null)
+const uploadError = ref('')
 
-const canStart = computed(() => Boolean(task.aFile.uploaded && task.bFile.uploaded && month.value))
+const canStart = computed(() => Boolean(aFileObject.value && bFileObject.value && month.value && !running.value))
+const hasCreatedTask = computed(() => task.id !== initialTask.id)
 
-function changeFile(variant: 'a' | 'b') {
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function changeFile(variant: 'a' | 'b', file: File) {
+  uploadError.value = ''
+
   if (variant === 'a') {
+    aFileObject.value = file
     task.aFile = {
-      name: '2026年7月玖鸣对账单.xlsx',
-      size: '1.8 MB',
+      name: file.name,
+      size: formatFileSize(file.size),
       uploaded: true,
     }
     return
   }
 
+  const recognized = file.name.startsWith('台州')
+  bFileObject.value = file
   task.bFile = {
-    name: '台州市川跃家居用品有限公司.xlsx',
-    size: '3.2 MB',
+    name: file.name,
+    size: formatFileSize(file.size),
     uploaded: true,
-    recognized: true,
+    recognized,
+    warning: recognized ? undefined : 'B表文件名通常以“台州”开头，请确认是否为系统出入库明细',
   }
 }
 
-function applyTask(nextTask: ReconciliationTask) {
-  Object.assign(task, structuredClone(nextTask))
-}
-
-function startReconciliation() {
-  if (!canStart.value || running.value) return
+async function startReconciliation() {
+  if (!canStart.value || !aFileObject.value || !bFileObject.value) return
 
   running.value = true
-  task.status = 'MATCHING'
-  task.title = '玖鸣 · 2026年7月对账'
-  task.progressSteps = [
-    { id: 1, title: '文件检查', status: 'done' },
-    { id: 2, title: '生成 C 表底稿', status: 'done' },
-    { id: 3, title: 'A/B 数据匹配', status: 'active' },
-    { id: 4, title: 'B 表反向核查', status: 'pending' },
-    { id: 5, title: '最终验收', status: 'pending' },
-  ]
+  uploadError.value = ''
+  task.status = 'PROCESSING'
+  task.title = '正在上传对账文件'
   task.progressDetail = {
-    currentText: '正在匹配 B 表',
-    progress: 72,
-    processedCRecords: 328,
-    totalCRecords: 541,
-    matchedBRecords: 402,
-    manualReviewCount: 17,
+    ...task.progressDetail,
+    currentText: '正在上传 A 表和 B 表',
+    progress: 5,
   }
 
-  window.setTimeout(() => {
-    applyTask(successfulTask)
+  try {
+    const response = await uploadReconciliationFiles(aFileObject.value, bFileObject.value)
+
+    task.id = response.task_id
+    task.status = response.status
+    task.title = `${response.task_id} · 文件已上传`
+    task.month = month.value
+    task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
+    task.progressDetail = {
+      currentText: '文件上传完成，等待开始对账接口',
+      progress: 10,
+      processedCRecords: 0,
+      totalCRecords: 0,
+      matchedBRecords: 0,
+      manualReviewCount: 0,
+    }
+  } catch (error) {
+    task.status = 'FAILED'
+    task.title = '文件上传失败'
+    uploadError.value = error instanceof Error ? error.message : '上传失败，请稍后重试'
+    task.progressDetail = {
+      ...task.progressDetail,
+      currentText: uploadError.value,
+      progress: 0,
+    }
+  } finally {
     running.value = false
-  }, 900)
+  }
 }
 </script>
 
@@ -90,6 +117,12 @@ function startReconciliation() {
         @change="changeFile"
       />
       <ReconciliationSettings v-model:month="month" :can-start="canStart" :running="running" @start="startReconciliation" />
+
+      <section v-if="uploadError || hasCreatedTask" class="panel-card upload-result-card">
+        <div v-if="hasCreatedTask" class="upload-status success">任务已创建：{{ task.id }}</div>
+        <div v-if="uploadError" class="upload-status warning">{{ uploadError }}</div>
+        <p class="muted small">当前仅完成上传建档；完整对账会在后续接入运行接口。</p>
+      </section>
     </aside>
 
     <main class="result-panel">

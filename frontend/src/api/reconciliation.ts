@@ -1,5 +1,12 @@
 import type { ReconciliationTask } from '@/types/reconciliation'
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+
+export interface UploadReconciliationResponse {
+  task_id: string
+  status: 'UPLOADED'
+}
+
 export const initialTask: ReconciliationTask = {
   id: 'REC-MOCK',
   title: '等待创建对账任务',
@@ -172,3 +179,44 @@ export const failedTask: ReconciliationTask = {
 }
 
 export const taskHistory: ReconciliationTask[] = [successfulTask, failedTask]
+
+export async function uploadReconciliationFiles(aFile: File, bFile: File): Promise<UploadReconciliationResponse> {
+  const formData = new FormData()
+  formData.append('a_file', aFile)
+  formData.append('b_file', bFile)
+
+  const response = await fetch(`${API_BASE_URL}/api/reconciliation/upload`, {
+    method: 'POST',
+    body: formData,
+  })
+
+  if (!response.ok) {
+    let message = `上传失败（${response.status}）`
+
+    try {
+      const payload = await response.json()
+      if (typeof payload?.detail === 'string') {
+        message = payload.detail
+      } else if (Array.isArray(payload?.detail)) {
+        message = payload.detail
+          .map((item: { msg?: string }) => item?.msg)
+          .filter(Boolean)
+          .join('；')
+      }
+    } catch {
+      const text = await response.text()
+      if (text) {
+        message = text
+      }
+    }
+
+    throw new Error(message)
+  }
+
+  const data = (await response.json()) as UploadReconciliationResponse
+  if (!data?.task_id) {
+    throw new Error('上传成功但未返回 task_id')
+  }
+
+  return data
+}
