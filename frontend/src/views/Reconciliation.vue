@@ -47,7 +47,6 @@ function changeFile(variant: 'a' | 'b', file: File) {
     size: formatFileSize(file.size),
     uploaded: true,
     recognized,
-    warning: recognized ? undefined : 'B表文件名通常以“台州”开头，请确认是否为系统出入库明细',
   }
 }
 
