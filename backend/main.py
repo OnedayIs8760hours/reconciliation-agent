@@ -1,11 +1,13 @@
 from pathlib import Path
 import sys
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # 项目根目录：确保以脚本方式运行时，也能正确导入 backend 下的模块。
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(PROJECT_ROOT / ".env")
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -32,4 +34,4 @@ app.include_router(router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=6161, reload=True)

@@ -7,8 +7,8 @@ import VerifySummary from '@/components/VerifySummary.vue'
 import CoverageStatistics from '@/components/CoverageStatistics.vue'
 import ResultDownload from '@/components/ResultDownload.vue'
 import ExceptionDrawer from '@/components/ExceptionDrawer.vue'
-import { initialTask, uploadReconciliationFiles } from '@/api/reconciliation'
-import type { ReconciliationTask } from '@/types/reconciliation'
+import { initialTask, getTaskDownloadUrl, runReconciliation, uploadReconciliationFiles } from '@/api/reconciliation'
+import type { DownloadFile, ReconciliationTask } from '@/types/reconciliation'
 
 const task = reactive<ReconciliationTask>(structuredClone(initialTask))
 const month = ref('2026-07')
@@ -65,23 +65,14 @@ async function startReconciliation() {
 
   try {
     const response = await uploadReconciliationFiles(aFileObject.value, bFileObject.value)
-
     task.id = response.task_id
-    task.status = response.status
-    task.title = `${response.task_id} · 文件已上传`
     task.month = month.value
-    task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
-    task.progressDetail = {
-      currentText: '文件上传完成，等待开始对账接口',
-      progress: 10,
-      processedCRecords: 0,
-      totalCRecords: 0,
-      matchedBRecords: 0,
-      manualReviewCount: 0,
-    }
+    task.title = `${response.task_id} · 开始对账`
+    const result = await runReconciliation(response.task_id, month.value)
+    applyTask(result)
   } catch (error) {
     task.status = 'FAILED'
-    task.title = '文件上传失败'
+    task.title = '文件上传或对账失败'
     uploadError.value = error instanceof Error ? error.message : '上传失败，请稍后重试'
     task.progressDetail = {
       ...task.progressDetail,
@@ -91,6 +82,27 @@ async function startReconciliation() {
   } finally {
     running.value = false
   }
+}
+
+function applyTask(result: ReconciliationTask) {
+  Object.assign(task, result)
+}
+
+async function handleDownload(file: DownloadFile) {
+  if (!task.id || !file.enabled) return
+  const kind = file.id === 'verify-report' ? 'report' : 'c'
+  const url = getTaskDownloadUrl(task.id, kind)
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error('下载失败')
+  }
+  const blob = await response.blob()
+  const link = document.createElement('a')
+  const objectUrl = URL.createObjectURL(blob)
+  link.href = objectUrl
+  link.download = file.name
+  link.click()
+  URL.revokeObjectURL(objectUrl)
 }
 </script>
 
@@ -120,7 +132,7 @@ async function startReconciliation() {
       <section v-if="uploadError || hasCreatedTask" class="panel-card upload-result-card">
         <div v-if="hasCreatedTask" class="upload-status success">任务已创建：{{ task.id }}</div>
         <div v-if="uploadError" class="upload-status warning">{{ uploadError }}</div>
-        <p class="muted small">当前仅完成上传建档；完整对账会在后续接入运行接口。</p>
+        <p class="muted small">上传后已自动调用运行接口并刷新任务结果。</p>
       </section>
     </aside>
 
@@ -135,7 +147,7 @@ async function startReconciliation() {
         </div>
         <button class="ghost-button" type="button" :disabled="!task.exceptions.length" @click="drawerOpen = true">查看异常明细</button>
       </section>
-      <ResultDownload :files="task.downloads" :status="task.status" />
+      <ResultDownload :files="task.downloads" :status="task.status" @download="handleDownload" />
     </main>
 
     <ExceptionDrawer :open="drawerOpen" :records="task.exceptions" @close="drawerOpen = false" />
