@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "additionalDirectories": [
+      "C:\\Users\\Woda\\s.ai-agent\\reconciliation-agent\\agent\\domain"
+    ],
+    "allow": [
+      "PowerShell(python -m pytest tests/unit/test_llm_adapters.py -q)"
+    ]
+  }
+}

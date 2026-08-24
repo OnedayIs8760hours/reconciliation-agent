@@ -1,8 +1,12 @@
-"""财务对账 C 表 Agent 空包。
+from .llm import ClaudeReconciliationAgent, ReconciliationLLMAgent
+from .domain import LLMConfig, LLMProviderName
 
-现有实现已清理，保留包入口供后续重新实现。
-"""
-
-__all__ = ["__version__"]
+__all__ = [
+    "__version__",
+    "ClaudeReconciliationAgent",
+    "LLMConfig",
+    "LLMProviderName",
+    "ReconciliationLLMAgent",
+]
 
 __version__ = "0.1.0"
