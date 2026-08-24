@@ -8,6 +8,7 @@ import CoverageStatistics from '@/components/CoverageStatistics.vue'
 import ResultDownload from '@/components/ResultDownload.vue'
 import ExceptionDrawer from '@/components/ExceptionDrawer.vue'
 import { initialTask, uploadReconciliationFiles } from '@/api/reconciliation'
+import type { ExcelSheetPreview, ExcelLlmAnalysisResult } from '@/api/reconciliation'
 import type { ReconciliationTask } from '@/types/reconciliation'
 
 const task = reactive<ReconciliationTask>(structuredClone(initialTask))
@@ -17,9 +18,10 @@ const drawerOpen = ref(false)
 const aFileObject = ref<File | null>(null)
 const bFileObject = ref<File | null>(null)
 const uploadError = ref('')
+const aPreview = ref<ExcelSheetPreview | null>(null)
+const llmAnalysis = ref<ExcelLlmAnalysisResult | null>(null)
 
 const canStart = computed(() => Boolean(aFileObject.value && bFileObject.value && month.value && !running.value))
-const hasCreatedTask = computed(() => task.id !== initialTask.id)
 
 function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
@@ -68,14 +70,16 @@ async function startReconciliation() {
 
     task.id = response.task_id
     task.status = response.status
-    task.title = `${response.task_id} · 文件已上传`
+    task.title = `${response.task_id} · A表已完成 LLM 行数分析`
     task.month = month.value
+    aPreview.value = response.a_preview
+    llmAnalysis.value = response.llm_result
     task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
     task.progressDetail = {
-      currentText: '文件上传完成，等待开始对账接口',
-      progress: 10,
+      currentText: `LLM 判断 A 表数据行数：${response.llm_result.row_count_guess ?? '未能确定'}`,
+      progress: 20,
       processedCRecords: 0,
-      totalCRecords: 0,
+      totalCRecords: Number(response.llm_result.row_count_guess) || 0,
       matchedBRecords: 0,
       manualReviewCount: 0,
     }
@@ -117,10 +121,12 @@ async function startReconciliation() {
       />
       <ReconciliationSettings v-model:month="month" :can-start="canStart" :running="running" @start="startReconciliation" />
 
-      <section v-if="uploadError || hasCreatedTask" class="panel-card upload-result-card">
-        <div v-if="hasCreatedTask" class="upload-status success">任务已创建：{{ task.id }}</div>
-        <div v-if="uploadError" class="upload-status warning">{{ uploadError }}</div>
-        <p class="muted small">当前仅完成上传建档；完整对账会在后续接入运行接口。</p>
+      <section v-if="aPreview && llmAnalysis" class="panel-card upload-result-card">
+        <div class="upload-status success">A 表 LLM 预览分析完成</div>
+        <p class="muted small">Sheet：{{ aPreview.sheet_name }} ｜ 最大行数：{{ aPreview.max_row }} ｜ 最大列数：{{ aPreview.max_column }}</p>
+        <p class="muted small">LLM 估算行数：{{ llmAnalysis.row_count_guess ?? '未能确定' }}</p>
+        <p class="muted small">置信度：{{ llmAnalysis.confidence ?? '-' }}</p>
+        <p class="muted small">原因：{{ llmAnalysis.reason ?? llmAnalysis.raw_text ?? '-' }}</p>
       </section>
     </aside>
 

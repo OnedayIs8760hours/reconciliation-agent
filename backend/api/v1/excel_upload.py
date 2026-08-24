@@ -4,6 +4,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
+from agent.llm import ReconciliationLLMAgent
+from agent.llm_providers import LLMProviderError
+from tools import ExcelSheetPreview, excel_tool
+
 router = APIRouter(
     prefix="/api/reconciliation",
     tags=["文件上传"],
@@ -61,6 +65,81 @@ async def _save_upload(file: UploadFile, target: Path) -> None:
         await file.close()
 
 
+def _preview_to_response(preview: ExcelSheetPreview) -> dict[str, object]:
+    """把 Excel 预览转成前端和 JSON 都能直接使用的结构。"""
+
+    return {
+        "sheet_name": preview.sheet_name,
+        "max_row": preview.max_row,
+        "max_column": preview.max_column,
+        "rows": [
+            {
+                "row_number": row.row_number,
+                "cells": [
+                    {
+                        "coordinate": cell.coordinate,
+                        "column": cell.column,
+                        "value": cell.display_text,
+                        "python_type": cell.python_type,
+                        "excel_data_type": cell.excel_data_type,
+                        "number_format": cell.number_format,
+                        "is_date": cell.is_date,
+                    }
+                    for cell in row.cells
+                ],
+            }
+            for row in preview.rows
+        ],
+    }
+
+
+def _parse_llm_json(text: str) -> dict[str, object]:
+    """尽量把 LLM 的 JSON 答案解析出来；解析失败时保留原文。"""
+
+    stripped = text.strip()
+    if not stripped:
+        return {"raw_text": ""}
+
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        stripped = "\n".join(lines).strip()
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return {"raw_text": text}
+
+    if isinstance(payload, dict):
+        return payload
+    return {"raw_text": text}
+
+
+def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dict[str, object]]:
+    """解析 A 表预览并调用 LLM 判断数据行数。"""
+
+    try:
+        preview = excel_tool.read_sheet_preview(a_file_path, rows=8, max_columns=12)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"A表解析失败：{exc}") from exc
+
+    try:
+        llm_response = ReconciliationLLMAgent(provider="deepseek", base_url="https://api.deepseek.com", api_key="sk-6bc6ae4ebb36490c9766ed5bf2b9a7a1").analyze_excel_preview(preview)
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
+
+    llm_result = _parse_llm_json(llm_response.text)
+    llm_result.setdefault("raw_text", llm_response.text)
+    llm_result["model"] = llm_response.model
+    llm_result["provider"] = llm_response.provider
+    return preview, llm_result
+
+
 @router.post("/upload")
 async def upload_excel(
     # File(...)：告诉 FastAPI 这个参数来自 multipart/form-data 文件上传
@@ -107,6 +186,10 @@ async def upload_excel(
         "created_at": created_at,
     }
 
+    preview, llm_result = _analyze_a_sheet_with_llm(a_file_path)
+    metadata["a_preview"] = _preview_to_response(preview)
+    metadata["llm_result"] = llm_result
+
     # json.dumps(...)：把 Python 字典转换成 JSON 字符串
     # ensure_ascii=False：保留中文，不转成 \uXXXX
     # indent=2：格式化缩进，便于人工查看
@@ -121,4 +204,6 @@ async def upload_excel(
     return {
         "task_id": task_id,
         "status": "UPLOADED",
+        "a_preview": metadata["a_preview"],
+        "llm_result": llm_result,
     }

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 
 from agent.domain import LLMConfig, LLMProviderName
 from agent.llm_providers import LLMProviderAdapter, LLMResponse, build_llm_adapter
+from tools import ExcelSheetPreview
 
 
 @dataclass
@@ -49,6 +51,49 @@ class ReconciliationLLMAgent:
     def complete(self, prompt: str, max_tokens: int = 1024) -> LLMResponse:
         """通过当前 provider adapter 发起一次文本生成请求。"""
         return self.adapter.complete(prompt, max_tokens=max_tokens)
+
+    def analyze_excel_preview(self, preview: ExcelSheetPreview, max_tokens: int = 1024) -> LLMResponse:
+        """让 LLM 根据 Excel 预览判断 A 表中有几行数据。"""
+        prompt = self.build_excel_preview_prompt(preview)
+        return self.complete(prompt, max_tokens=max_tokens)
+
+    def build_excel_preview_prompt(self, preview: ExcelSheetPreview) -> str:
+        """把 Excel 预览转换成稳定的 LLM 输入文本。"""
+        payload = {
+            "sheet_name": preview.sheet_name,
+            "max_row": preview.max_row,
+            "max_column": preview.max_column,
+            "sample_rows": [
+                {
+                    "row_number": row.row_number,
+                    "cells": [
+                        {
+                            "coordinate": cell.coordinate,
+                            "column": cell.column,
+                            "value": cell.display_text,
+                            "python_type": cell.python_type,
+                            "excel_data_type": cell.excel_data_type,
+                            "number_format": cell.number_format,
+                            "is_date": cell.is_date,
+                        }
+                        for cell in row.cells
+                    ],
+                }
+                for row in preview.rows
+            ],
+        }
+        preview_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        return (
+            "你是一个 Excel 表结构分析助手。\n"
+            "下面是 A 表的工作表名称、实际最大行列数，以及从开头读取的部分样例行。\n"
+            "请根据这些信息判断这张 A 表里有几行真正的数据。\n"
+            "注意：\n"
+            "1. 数据行数不应包含表头行、标题说明行和空行。\n"
+            "2. 如果样例不足以准确判断，请结合 max_row 给出最合理判断，并说明原因。\n"
+            "3. 请用中文回答，并优先给出明确数字。\n"
+            "4. 输出 JSON，字段包括 row_count_guess、header_row_guess、confidence、reason。\n\n"
+            f"A 表预览 JSON：\n{preview_json}"
+        )
 
     def explain_plan(self, context: str) -> LLMResponse:
         """让 LLM 用中文解释对账执行计划、关键风险和验收点。"""

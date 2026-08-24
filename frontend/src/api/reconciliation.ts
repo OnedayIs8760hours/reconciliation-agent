@@ -2,9 +2,43 @@ import type { ReconciliationTask } from '@/types/reconciliation'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
+export interface ExcelPreviewCell {
+  coordinate: string
+  column: number
+  value: string
+  python_type: string
+  excel_data_type: string
+  number_format: string
+  is_date: boolean
+}
+
+export interface ExcelPreviewRow {
+  row_number: number
+  cells: ExcelPreviewCell[]
+}
+
+export interface ExcelSheetPreview {
+  sheet_name: string
+  max_row: number
+  max_column: number
+  rows: ExcelPreviewRow[]
+}
+
+export interface ExcelLlmAnalysisResult {
+  row_count_guess?: number | string
+  header_row_guess?: number | string
+  confidence?: string
+  reason?: string
+  raw_text?: string
+  model?: string
+  provider?: string
+}
+
 export interface UploadReconciliationResponse {
   task_id: string
   status: 'UPLOADED'
+  a_preview: ExcelSheetPreview
+  llm_result: ExcelLlmAnalysisResult
 }
 
 export const initialTask: ReconciliationTask = {
