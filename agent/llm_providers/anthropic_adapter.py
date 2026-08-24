@@ -27,6 +27,7 @@ class AnthropicAdapter:
         self.max_retries = max_retries
         self._client = client
 
+    # property装饰器将 client() 方法变成一个只读属性，它让 client() 这个方法变成可以用 self.client 访问的属性。
     @property
     def client(self) -> Any:
         if self._client is None:

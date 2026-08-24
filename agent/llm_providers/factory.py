@@ -37,6 +37,7 @@ PROVIDER_DEFAULTS: dict[LLMProviderName, ProviderDefaults] = {
 
 def resolve_llm_config(config: LLMConfig) -> LLMConfig:
     defaults = PROVIDER_DEFAULTS[config.provider]
+    # 拿原来的 config 复制一份，然后把 model、base_url、api_key_env 这几个字段补成最终值
     return config.model_copy(
         update={
             "model": config.model or defaults.model,
