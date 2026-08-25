@@ -495,15 +495,21 @@ class ExcelTool:
         """构建单元格预览信息，保留 LLM 判断表结构需要的类型和格式。"""
 
         value = self.normalize_cell_value(cell.value)
+        # getattr(...)：安全读取单元格属性；合并单元格 MergedCell 可能没有 is_date 等属性。
+        excel_data_type = getattr(cell, "data_type", "")
+        # getattr(...)：安全读取数字格式；如果没有 number_format，就按空字符串处理。
+        number_format = getattr(cell, "number_format", "")
+        # getattr(...)：安全读取日期标记；合并单元格没有 is_date 时默认不是日期。
+        is_date = bool(getattr(cell, "is_date", False))
         return ExcelPreviewCell(
             coordinate=cell.coordinate,
             column=cell.column,
             value=value,
             python_type=type(value).__name__ if value is not None else "None",
-            excel_data_type=cell.data_type,
-            number_format=cell.number_format,
-            is_date=cell.is_date,
-            display_text=self.format_preview_display_text(value, cell.number_format),
+            excel_data_type=excel_data_type,
+            number_format=number_format,
+            is_date=is_date,
+            display_text=self.format_preview_display_text(value, number_format),
         )
 
     def trim_trailing_empty_cells(self, cells: Sequence[ExcelPreviewCell]) -> list[ExcelPreviewCell]:

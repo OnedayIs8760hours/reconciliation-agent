@@ -129,8 +129,8 @@ def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dic
         raise HTTPException(status_code=400, detail=f"A表解析失败：{exc}") from exc
 
     try:
-        llm_response = ReconciliationLLMAgent(provider="deepseek").analyze_excel_preview(preview)
-        # llm_response = ReconciliationLLMAgent(provider="deepseek", base_url="https://api.deepseek.com").analyze_excel_preview(preview)
+        # llm_response = ReconciliationLLMAgent(provider="deepseek").analyze_excel_preview(preview)
+        llm_response = ReconciliationLLMAgent(provider="deepseek",model="deepseek-v4-flash", base_url="https://api.deepseek.com", api_key_env="DEEPSEEK_API_KEY",).analyze_excel_preview(preview)
     except LLMProviderError as exc:
         raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
     except Exception as exc:
@@ -151,7 +151,7 @@ def _build_product_mapping(a_file_path: Path, b_file_path: Path) -> dict[str, ob
         service = ProductMappingService(
             llm_agent=ReconciliationLLMAgent(
                 provider="deepseek",
-                model="deepseek-v4-pro",
+                model="deepseek-v4-flash",
                 base_url=Config.DEEPSEEK_BASE_URL,
                 api_key_env="DEEPSEEK_API_KEY",
             )

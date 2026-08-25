@@ -134,6 +134,8 @@ async function startReconciliation() {
       <section v-if="productMapping" class="panel-card upload-result-card">
         <div class="upload-status success">商品规格映射完成</div>
         <p class="muted small">A列字段：{{ productMapping.a_column_name }} ｜ B列字段：{{ productMapping.b_column_name }}</p>
+        <p class="muted small">A字段识别：第 {{ productMapping.structure.a_sheet.header_row_guess }} 行表头 ｜ 置信度 {{ productMapping.structure.a_sheet.confidence }}</p>
+        <p class="muted small">B字段识别：第 {{ productMapping.structure.b_sheet.header_row_guess }} 行表头 ｜ 置信度 {{ productMapping.structure.b_sheet.confidence }}</p>
         <p class="muted small">A去重数量：{{ productMapping.summary.a_unique_count }} ｜ B去重数量：{{ productMapping.summary.b_unique_count }}</p>
         <p class="muted small">成功映射：{{ productMapping.summary.mapping_count }} ｜ 待复核：{{ productMapping.summary.need_review_count }}</p>
         <p class="muted small">A未匹配：{{ productMapping.summary.unmatched_a_count }} ｜ B未匹配：{{ productMapping.summary.unmatched_b_count }}</p>

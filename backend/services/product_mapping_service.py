@@ -33,13 +33,25 @@ class ProductMappingService:
         *,
         a_sheet_name: str | None = None,
         b_sheet_name: str | None = None,
+        preview_rows: int | None = None,
     ) -> dict[str, object]:
         """先识别 A/B 表商品字段，再读取商品列并生成映射结果。"""
 
-        a_preview = excel_tool.read_sheet_preview(a_file_path, rows=8, max_columns=12)
-        b_preview = excel_tool.read_sheet_preview(b_file_path, rows=8, max_columns=12)
+        preview_row_count = preview_rows or 20
+
+        a_preview = excel_tool.read_sheet_preview(
+            a_file_path,
+            sheet_name=a_sheet_name,
+            rows=preview_row_count,
+        )
+        b_preview = excel_tool.read_sheet_preview(
+            b_file_path,
+            sheet_name=b_sheet_name,
+            rows=preview_row_count,
+        )
 
         structure_result = self.guess_product_fields(a_preview, b_preview)
+        self.validate_structure_result(structure_result)
 
         a_unique = excel_tool.get_unique_column_values(
             a_file_path,
@@ -99,6 +111,19 @@ class ProductMappingService:
         a_sheet = parse_field_guess(payload.get("a_sheet"))
         b_sheet = parse_field_guess(payload.get("b_sheet"))
         return ProductStructureResult(a_sheet=a_sheet, b_sheet=b_sheet, raw_text=llm_response.text)
+
+    def validate_structure_result(self, structure_result: ProductStructureResult) -> None:
+        """检查 LLM 是否成功识别出 A/B 表商品字段。"""
+
+        if structure_result.parse_error:
+            raise ValueError(f"商品字段结构识别失败：{structure_result.parse_error}")
+
+        if not structure_result.a_sheet.field_name:
+            raise ValueError("LLM 没有识别出 A 表商品字段，请检查 A 表表头是否清晰")
+
+        if not structure_result.b_sheet.field_name:
+            raise ValueError("LLM 没有识别出 B 表商品字段，请检查 B 表表头是否清晰")
+
 
 
 def parse_field_guess(value: object) -> ProductFieldGuess:

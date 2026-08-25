@@ -68,7 +68,22 @@ export interface ProductMappingSummary {
   need_review_count: number
 }
 
+export interface ProductFieldGuess {
+  field_name: string
+  header_row_guess: number
+  confidence: number
+  reason: string
+}
+
+export interface ProductStructureResult {
+  a_sheet: ProductFieldGuess
+  b_sheet: ProductFieldGuess
+  raw_text?: string
+  parse_error?: string
+}
+
 export interface ProductMappingResponse {
+  structure: ProductStructureResult
   a_column_name: string
   b_column_name: string
   a_unique: string[]
