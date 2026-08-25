@@ -53,6 +53,10 @@ function changeFile(variant: 'a' | 'b', file: File) {
   }
 }
 
+function formatJson(value: unknown) {
+  return JSON.stringify(value, null, 2)
+}
+
 async function startReconciliation() {
   if (!canStart.value || !aFileObject.value || !bFileObject.value) return
 
@@ -139,6 +143,21 @@ async function startReconciliation() {
         <p class="muted small">A去重数量：{{ productMapping.summary.a_unique_count }} ｜ B去重数量：{{ productMapping.summary.b_unique_count }}</p>
         <p class="muted small">成功映射：{{ productMapping.summary.mapping_count }} ｜ 待复核：{{ productMapping.summary.need_review_count }}</p>
         <p class="muted small">A未匹配：{{ productMapping.summary.unmatched_a_count }} ｜ B未匹配：{{ productMapping.summary.unmatched_b_count }}</p>
+
+        <details class="mapping-json-block">
+          <summary>A 表去重后的商品列表 JSON</summary>
+          <pre>{{ formatJson(productMapping.a_unique) }}</pre>
+        </details>
+
+        <details class="mapping-json-block">
+          <summary>B 表去重后的商品列表 JSON</summary>
+          <pre>{{ formatJson(productMapping.b_unique) }}</pre>
+        </details>
+
+        <details class="mapping-json-block">
+          <summary>完整商品映射结果 JSON</summary>
+          <pre>{{ formatJson(productMapping) }}</pre>
+        </details>
       </section>
     </aside>
 
