@@ -110,6 +110,7 @@ def test_product_mapping_service_uses_llm_guessed_fields(tmp_path: Path) -> None
     assert result["b_column_name"] == "规格"
     assert result["a_unique"] == ["商品A", "商品B"]
     assert result["b_unique"] == ["商品A", "商品C"]
+    assert result["a_b_intersection"] == ["商品A"]
     assert result["summary"]["mapping_count"] == 1  # type: ignore[index]
 
 
@@ -141,3 +142,31 @@ def test_product_mapping_service_reports_empty_llm_field(tmp_path: Path) -> None
         assert "LLM 没有识别出 A 表商品字段" in str(exc)
     else:
         raise AssertionError("LLM 字段为空时应该抛出 ValueError")
+
+
+def test_product_mapping_service_matches_identical_values_without_llm_mapping(tmp_path: Path) -> None:
+    """完全相同的 A/B 规格应由程序直接关联，不依赖 LLM 是否返回映射。"""
+
+    class EmptyMappingAgent(FakeProductMappingAgent):
+        def analyze_product_mapping(self, a_products: list[str], b_products: list[str]) -> LLMResponse:
+            text = """
+            {
+              "normalization_rules": {},
+              "mappings": [],
+              "unmatched_a": [],
+              "unmatched_b": [],
+              "need_review": []
+            }
+            """
+            return LLMResponse(text=text, model="fake-model", provider="deepseek")
+
+    a_file_path = tmp_path / "a.xlsx"
+    b_file_path = tmp_path / "b.xlsx"
+    create_a_file(a_file_path)
+    create_b_file(b_file_path)
+
+    service = ProductMappingService(llm_agent=EmptyMappingAgent())  # type: ignore[arg-type]
+
+    result = service.build_product_mapping(a_file_path, b_file_path)
+
+    assert result["a_b_intersection"] == ["商品A"]

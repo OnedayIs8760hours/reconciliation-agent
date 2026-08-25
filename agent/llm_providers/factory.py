@@ -31,7 +31,7 @@ PROVIDER_DEFAULTS: dict[LLMProviderName, ProviderDefaults] = {
         api_key_env="DASHSCOPE_API_KEY",
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
     ),
-    "ollama": ProviderDefaults(model="qwen2.5", base_url="http://localhost:11434"),
+    "ollama": ProviderDefaults(model="qwen3.5:9b", base_url="http://localhost:11434"),
 }
 
 

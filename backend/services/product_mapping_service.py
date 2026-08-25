@@ -53,6 +53,7 @@ class ProductMappingService:
         structure_result = self.guess_product_fields(a_preview, b_preview)
         self.validate_structure_result(structure_result)
 
+        # 脚本提取唯一值列
         a_unique = excel_tool.get_unique_column_values(
             a_file_path,
             structure_result.a_sheet.field_name,
@@ -69,6 +70,7 @@ class ProductMappingService:
         # analyze_product_mapping(...)：把去重后的商品列表交给 LLM 做语义匹配。
         llm_response = self.llm_agent.analyze_product_mapping(a_unique, b_unique)
         mapping_result = parse_product_mapping_result(llm_response.text)
+        a_b_intersection = build_a_b_intersection(a_unique, b_unique)
 
         return {
             "structure": structure_result.to_dict(),
@@ -76,6 +78,7 @@ class ProductMappingService:
             "b_column_name": structure_result.b_sheet.field_name,
             "a_unique": a_unique,
             "b_unique": b_unique,
+            "a_b_intersection": a_b_intersection,
             "llm_model": llm_response.model,
             "llm_provider": llm_response.provider,
             "result": mapping_result.to_dict(),
@@ -104,11 +107,16 @@ class ProductMappingService:
         except Exception as exc:
             return ProductStructureResult(parse_error=str(exc))
 
+        
+        
+        # 把LLM 的回答解析成 JSON 对象，方便后续提取字段信息。
         payload = parse_json_object(llm_response.text)
         if payload is None:
             return ProductStructureResult(raw_text=llm_response.text, parse_error="LLM 返回内容不是合法 JSON")
 
+        # 从 JSON 对象中提取 A 表的字段识别结果。
         a_sheet = parse_field_guess(payload.get("a_sheet"))
+        # 从 JSON 对象中提取 B 表的字段识别结果。
         b_sheet = parse_field_guess(payload.get("b_sheet"))
         return ProductStructureResult(a_sheet=a_sheet, b_sheet=b_sheet, raw_text=llm_response.text)
 
@@ -169,6 +177,16 @@ def parse_product_mapping_result(text: str) -> ProductMappingResult:
         need_review=need_review,
         raw_text=text,
     )
+
+
+def build_a_b_intersection(
+    a_unique: list[str],
+    b_unique: list[str],
+) -> list[str]:
+    """返回 A/B 去重商品交集，并保留 A 表的原始顺序。"""
+
+    b_values = set(b_unique)
+    return [a_value for a_value in a_unique if a_value in b_values]
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:

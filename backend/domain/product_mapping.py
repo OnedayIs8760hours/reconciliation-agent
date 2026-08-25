@@ -23,6 +23,7 @@ class ProductFieldGuess:
         }
 
 
+# frozen 的作用是让 dataclass 实例不可变，防止属性被修改，提高数据安全性。
 @dataclass(frozen=True)
 class ProductStructureResult:
     """A/B 表商品字段结构识别结果。"""
