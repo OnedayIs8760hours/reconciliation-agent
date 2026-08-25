@@ -34,11 +34,57 @@ export interface ExcelLlmAnalysisResult {
   provider?: string
 }
 
+export interface ProductMappingItem {
+  standard: string
+  a_value: string
+  b_value: string
+  confidence: number
+  reason: string
+}
+
+export interface ProductReviewItem {
+  a_value: string
+  b_value: string
+  confidence: number
+  reason: string
+}
+
+export interface ProductMappingResultPayload {
+  normalization_rules: Record<string, string[]>
+  mappings: ProductMappingItem[]
+  unmatched_a: string[]
+  unmatched_b: string[]
+  need_review: ProductReviewItem[]
+  raw_text?: string
+  parse_error?: string
+}
+
+export interface ProductMappingSummary {
+  a_unique_count: number
+  b_unique_count: number
+  mapping_count: number
+  unmatched_a_count: number
+  unmatched_b_count: number
+  need_review_count: number
+}
+
+export interface ProductMappingResponse {
+  a_column_name: string
+  b_column_name: string
+  a_unique: string[]
+  b_unique: string[]
+  llm_model: string
+  llm_provider: string
+  result: ProductMappingResultPayload
+  summary: ProductMappingSummary
+}
+
 export interface UploadReconciliationResponse {
   task_id: string
   status: 'UPLOADED'
   a_preview: ExcelSheetPreview
   llm_result: ExcelLlmAnalysisResult
+  product_mapping: ProductMappingResponse
 }
 
 export const initialTask: ReconciliationTask = {

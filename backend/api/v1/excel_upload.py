@@ -6,8 +6,8 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from agent.llm import ReconciliationLLMAgent
 from agent.llm_providers import LLMProviderError
+from backend.services.product_mapping_service import ProductMappingService
 from tools import ExcelSheetPreview, excel_tool
-from config import Config
 
 router = APIRouter(
     prefix="/api/reconciliation",
@@ -128,7 +128,7 @@ def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dic
         raise HTTPException(status_code=400, detail=f"A表解析失败：{exc}") from exc
 
     try:
-        llm_response = ReconciliationLLMAgent(provider="deepseek", base_url=Config.DEEPSEEK_BASE_URL, api_key=Config.DEEPSEEK_API_KEY).analyze_excel_preview(preview)
+        llm_response = ReconciliationLLMAgent(provider="deepseek").analyze_excel_preview(preview)
         # llm_response = ReconciliationLLMAgent(provider="deepseek", base_url="https://api.deepseek.com").analyze_excel_preview(preview)
     except LLMProviderError as exc:
         raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
@@ -140,6 +140,21 @@ def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dic
     llm_result["model"] = llm_response.model
     llm_result["provider"] = llm_response.provider
     return preview, llm_result
+
+
+def _build_product_mapping(a_file_path: Path, b_file_path: Path) -> dict[str, object]:
+    """调用商品映射服务，生成 A/B 商品规格映射结果。"""
+
+    try:
+        # ProductMappingService(...)：创建商品映射服务，服务内部负责读列、去重、调用 LLM。
+        service = ProductMappingService(llm_agent=ReconciliationLLMAgent(provider="deepseek"))
+        return service.build_product_mapping(a_file_path, b_file_path)
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=500, detail=f"商品映射 LLM 分析失败：{exc}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"商品字段读取失败：{exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"商品映射生成失败：{exc}") from exc
 
 
 @router.post("/upload")
@@ -192,6 +207,9 @@ async def upload_excel(
     metadata["a_preview"] = _preview_to_response(preview)
     metadata["llm_result"] = llm_result
 
+    product_mapping = _build_product_mapping(a_file_path, b_file_path)
+    metadata["product_mapping"] = product_mapping
+
     # json.dumps(...)：把 Python 字典转换成 JSON 字符串
     # ensure_ascii=False：保留中文，不转成 \uXXXX
     # indent=2：格式化缩进，便于人工查看
@@ -208,4 +226,5 @@ async def upload_excel(
         "status": "UPLOADED",
         "a_preview": metadata["a_preview"],
         "llm_result": llm_result,
+        "product_mapping": product_mapping,
     }

@@ -95,6 +95,66 @@ class ReconciliationLLMAgent:
             f"A 表预览 JSON：\n{preview_json}"
         )
 
+    def analyze_product_mapping(
+        self,
+        a_products: list[str],
+        b_products: list[str],
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        """让 LLM 分析 A/B 商品规格，并返回商品映射 JSON。"""
+
+        prompt = self.build_product_mapping_prompt(a_products, b_products)
+        return self.complete(prompt, max_tokens=max_tokens)
+
+    def build_product_mapping_prompt(self, a_products: list[str], b_products: list[str]) -> str:
+        """把去重后的商品列表转换成稳定的 LLM 输入文本。"""
+
+        payload = {
+            "a_products": a_products,
+            "b_products": b_products,
+        }
+        # json.dumps(...)：把 Python 字典转成 JSON 字符串；ensure_ascii=False 保留中文。
+        product_json = json.dumps(payload, ensure_ascii=False, indent=2)
+
+        return (
+            "你是一个商品规格匹配助手。\n"
+            "现在要根据 A 表商品字段和 B 表商品字段，建立商品映射关系。\n\n"
+            "重要原则：\n"
+            "1. 程序已经完成去空、去重、首尾空格清理和全角半角统一，你不要再重复做去重。\n"
+            "2. 你只负责判断商品命名规律、公共商品信息和 A/B 商品对应关系。\n"
+            "3. 不要随意忽略数字、型号、颜色、款式、'款'、'新'、'*' 等可能有业务意义的内容。\n"
+            "4. 如果不能确定匹配关系，不要强行匹配，应该放入 unmatched 或 need_review。\n"
+            "5. 如果双方高度相似但关键属性不同，例如颜色不同，请放入 need_review。\n\n"
+            "请只输出 JSON，不要输出 Markdown 代码块，不要输出解释文字。\n"
+            "JSON 结构必须是：\n"
+            "{\n"
+            "  \"normalization_rules\": {\n"
+            "    \"b_prefix_to_ignore\": [],\n"
+            "    \"ignorable_separators\": []\n"
+            "  },\n"
+            "  \"mappings\": [\n"
+            "    {\n"
+            "      \"standard\": \"标准商品规格\",\n"
+            "      \"a_value\": \"A表原始商品值\",\n"
+            "      \"b_value\": \"B表原始商品值\",\n"
+            "      \"confidence\": 1.0,\n"
+            "      \"reason\": \"匹配原因\"\n"
+            "    }\n"
+            "  ],\n"
+            "  \"unmatched_a\": [],\n"
+            "  \"unmatched_b\": [],\n"
+            "  \"need_review\": [\n"
+            "    {\n"
+            "      \"a_value\": \"A表商品值\",\n"
+            "      \"b_value\": \"B表商品值\",\n"
+            "      \"confidence\": 0.78,\n"
+            "      \"reason\": \"需要复核的原因\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            f"商品列表 JSON：\n{product_json}"
+        )
+
     def explain_plan(self, context: str) -> LLMResponse:
         """让 LLM 用中文解释对账执行计划、关键风险和验收点。"""
         prompt = f"请解释以下对账执行计划，并指出关键风险和验收点：\n{context}"

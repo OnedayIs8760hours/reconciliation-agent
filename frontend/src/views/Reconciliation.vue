@@ -8,7 +8,7 @@ import CoverageStatistics from '@/components/CoverageStatistics.vue'
 import ResultDownload from '@/components/ResultDownload.vue'
 import ExceptionDrawer from '@/components/ExceptionDrawer.vue'
 import { initialTask, uploadReconciliationFiles } from '@/api/reconciliation'
-import type { ExcelSheetPreview, ExcelLlmAnalysisResult } from '@/api/reconciliation'
+import type { ExcelSheetPreview, ExcelLlmAnalysisResult, ProductMappingResponse } from '@/api/reconciliation'
 import type { ReconciliationTask } from '@/types/reconciliation'
 
 const task = reactive<ReconciliationTask>(structuredClone(initialTask))
@@ -20,6 +20,7 @@ const bFileObject = ref<File | null>(null)
 const uploadError = ref('')
 const aPreview = ref<ExcelSheetPreview | null>(null)
 const llmAnalysis = ref<ExcelLlmAnalysisResult | null>(null)
+const productMapping = ref<ProductMappingResponse | null>(null)
 
 const canStart = computed(() => Boolean(aFileObject.value && bFileObject.value && month.value && !running.value))
 
@@ -74,6 +75,7 @@ async function startReconciliation() {
     task.month = month.value
     aPreview.value = response.a_preview
     llmAnalysis.value = response.llm_result
+    productMapping.value = response.product_mapping
     task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
     task.progressDetail = {
       currentText: `LLM 判断 A 表数据行数：${response.llm_result.row_count_guess ?? '未能确定'}`,
@@ -127,6 +129,14 @@ async function startReconciliation() {
         <p class="muted small">LLM 估算行数：{{ llmAnalysis.row_count_guess ?? '未能确定' }}</p>
         <p class="muted small">置信度：{{ llmAnalysis.confidence ?? '-' }}</p>
         <p class="muted small">原因：{{ llmAnalysis.reason ?? llmAnalysis.raw_text ?? '-' }}</p>
+      </section>
+
+      <section v-if="productMapping" class="panel-card upload-result-card">
+        <div class="upload-status success">商品规格映射完成</div>
+        <p class="muted small">A列字段：{{ productMapping.a_column_name }} ｜ B列字段：{{ productMapping.b_column_name }}</p>
+        <p class="muted small">A去重数量：{{ productMapping.summary.a_unique_count }} ｜ B去重数量：{{ productMapping.summary.b_unique_count }}</p>
+        <p class="muted small">成功映射：{{ productMapping.summary.mapping_count }} ｜ 待复核：{{ productMapping.summary.need_review_count }}</p>
+        <p class="muted small">A未匹配：{{ productMapping.summary.unmatched_a_count }} ｜ B未匹配：{{ productMapping.summary.unmatched_b_count }}</p>
       </section>
     </aside>
 

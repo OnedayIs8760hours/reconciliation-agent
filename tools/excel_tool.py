@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
+import unicodedata
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -206,6 +207,109 @@ class ExcelTool:
             rows.append(record)
 
         return ExcelSheetData(sheet_name=worksheet.title, headers=headers, rows=rows)
+
+    def get_column_values(
+        self,
+        file_path: str | Path,
+        column_name: str,
+        *,
+        sheet_name: str | None = None,
+        header_row: int = 1,
+        data_only: bool = True,
+    ) -> list[ExcelValue]:
+        """根据表头名称读取整列数据。"""
+
+        # load_workbook(...)：打开 Excel 文件，data_only=True 时读取公式的计算结果。
+        workbook = self.load_workbook(file_path, data_only=data_only)
+        # get_sheet(...)：拿到指定工作表；sheet_name 为 None 时拿当前活动工作表。
+        worksheet = self.get_sheet(workbook, sheet_name)
+        # read_headers(...)：读取表头行，并把空表头、重复表头做基础处理。
+        headers = self.read_headers(worksheet, header_row=header_row)
+
+        column_index = self.find_header_index(headers, column_name)
+        values: list[ExcelValue] = []
+
+        # iter_rows(...)：逐行读取数据区；values_only=True 表示只取单元格的值。
+        for row in worksheet.iter_rows(min_row=header_row + 1, values_only=True):
+            value: ExcelValue = None
+            if column_index < len(row):
+                # normalize_cell_value(...)：把 Excel 里的值转成业务层常用类型。
+                value = self.normalize_cell_value(row[column_index])
+            values.append(value)
+
+        return values
+
+    def clean_product_text(self, value: ExcelValue) -> str:
+        """清洗商品字段文本，只处理格式问题，不处理业务语义。"""
+
+        if value is None:
+            return ""
+
+        # str(...)：把数字、日期等值转成字符串，方便后续统一清洗。
+        text = str(value)
+        # unicodedata.normalize(...)：把全角字符尽量转成半角字符，例如全角数字转半角数字。
+        text = unicodedata.normalize("NFKC", text)
+        # replace(...)：把换行、制表符等格式字符替换成普通空格，避免粘在一起。
+        text = text.replace("\r", " ")
+        text = text.replace("\n", " ")
+        text = text.replace("\t", " ")
+        text = text.replace("　", " ")
+        text = text.replace("\xa0", " ")
+        # strip(...)：去掉首尾空格，不删除中间可能有业务意义的内容。
+        text = text.strip()
+        return text
+
+    def unique_product_values(self, values: Iterable[ExcelValue]) -> list[str]:
+        """对商品字段去空、清洗、去重，并保留第一次出现的顺序。"""
+
+        result: list[str] = []
+        seen: set[str] = set()
+
+        for value in values:
+            cleaned_value = self.clean_product_text(value)
+            if not cleaned_value:
+                continue
+            if cleaned_value in seen:
+                continue
+            # add(...)：把已经出现过的值记录下来，后面再遇到就跳过。
+            seen.add(cleaned_value)
+            # append(...)：按原顺序把第一次出现的商品值加入结果列表。
+            result.append(cleaned_value)
+
+        return result
+
+    def get_unique_column_values(
+        self,
+        file_path: str | Path,
+        column_name: str,
+        *,
+        sheet_name: str | None = None,
+        header_row: int = 1,
+        data_only: bool = True,
+    ) -> list[str]:
+        """读取指定商品列，并完成基础清洗和去重。"""
+
+        values = self.get_column_values(
+            file_path,
+            column_name,
+            sheet_name=sheet_name,
+            header_row=header_row,
+            data_only=data_only,
+        )
+        return self.unique_product_values(values)
+
+    def find_header_index(self, headers: Sequence[str], column_name: str) -> int:
+        """在表头列表中查找指定字段的位置。"""
+
+        # strip(...)：去掉传入字段名首尾空格，避免用户输入多余空格导致找不到。
+        expected_name = column_name.strip()
+
+        for index, header in enumerate(headers):
+            if header == expected_name:
+                return index
+
+        available = ", ".join(header for header in headers if header)
+        raise ValueError(f"找不到字段：{column_name}；可用字段：{available}")
 
     def read_headers(self, worksheet: Worksheet, *, header_row: int = 1) -> list[str]:
         """读取并规范化表头。"""
