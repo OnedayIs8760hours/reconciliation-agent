@@ -5,7 +5,13 @@ from pathlib import Path
 from typing import Any
 
 from agent.llm import ReconciliationLLMAgent
-from backend.domain.product_mapping import ProductMappingItem, ProductMappingResult, ProductReviewItem
+from backend.domain.product_mapping import (
+    ProductFieldGuess,
+    ProductMappingItem,
+    ProductMappingResult,
+    ProductReviewItem,
+    ProductStructureResult,
+)
 from tools import excel_tool
 
 
@@ -25,26 +31,27 @@ class ProductMappingService:
         a_file_path: Path,
         b_file_path: Path,
         *,
-        a_column_name: str = "型号",
-        b_column_name: str = "规格",
         a_sheet_name: str | None = None,
         b_sheet_name: str | None = None,
-        header_row: int = 1,
     ) -> dict[str, object]:
-        """从 A/B Excel 中读取商品列，并生成商品映射结果。"""
+        """先识别 A/B 表商品字段，再读取商品列并生成映射结果。"""
 
-        # get_unique_column_values(...)：读取指定列，并完成去空、清洗、去重。
+        a_preview = excel_tool.read_sheet_preview(a_file_path, rows=8, max_columns=12)
+        b_preview = excel_tool.read_sheet_preview(b_file_path, rows=8, max_columns=12)
+
+        structure_result = self.guess_product_fields(a_preview, b_preview)
+
         a_unique = excel_tool.get_unique_column_values(
             a_file_path,
-            a_column_name,
+            structure_result.a_sheet.field_name,
             sheet_name=a_sheet_name,
-            header_row=header_row,
+            header_row=structure_result.a_sheet.header_row_guess,
         )
         b_unique = excel_tool.get_unique_column_values(
             b_file_path,
-            b_column_name,
+            structure_result.b_sheet.field_name,
             sheet_name=b_sheet_name,
-            header_row=header_row,
+            header_row=structure_result.b_sheet.header_row_guess,
         )
 
         # analyze_product_mapping(...)：把去重后的商品列表交给 LLM 做语义匹配。
@@ -52,8 +59,9 @@ class ProductMappingService:
         mapping_result = parse_product_mapping_result(llm_response.text)
 
         return {
-            "a_column_name": a_column_name,
-            "b_column_name": b_column_name,
+            "structure": structure_result.to_dict(),
+            "a_column_name": structure_result.a_sheet.field_name,
+            "b_column_name": structure_result.b_sheet.field_name,
             "a_unique": a_unique,
             "b_unique": b_unique,
             "llm_model": llm_response.model,
@@ -68,6 +76,51 @@ class ProductMappingService:
                 "need_review_count": mapping_result.review_count,
             },
         }
+
+    def guess_product_fields(
+        self,
+        a_preview: object,
+        b_preview: object,
+    ) -> ProductStructureResult:
+        """让 LLM 根据表结构识别 A/B 商品字段。"""
+
+        if not isinstance(a_preview, object) or not isinstance(b_preview, object):
+            return ProductStructureResult(parse_error="预览数据无效")
+
+        try:
+            llm_response = self.llm_agent.analyze_sheet_structure(a_preview, b_preview)  # type: ignore[arg-type]
+        except Exception as exc:
+            return ProductStructureResult(parse_error=str(exc))
+
+        payload = parse_json_object(llm_response.text)
+        if payload is None:
+            return ProductStructureResult(raw_text=llm_response.text, parse_error="LLM 返回内容不是合法 JSON")
+
+        a_sheet = parse_field_guess(payload.get("a_sheet"))
+        b_sheet = parse_field_guess(payload.get("b_sheet"))
+        return ProductStructureResult(a_sheet=a_sheet, b_sheet=b_sheet, raw_text=llm_response.text)
+
+
+def parse_field_guess(value: object) -> ProductFieldGuess:
+    """解析 LLM 返回的单个表商品字段识别结果。"""
+
+    if not isinstance(value, dict):
+        return ProductFieldGuess()
+
+    field_name = safe_string(value.get("field_name"))
+    header_row_guess = safe_int(value.get("header_row_guess"), default=1)
+    confidence = safe_float(value.get("confidence"))
+    reason = safe_string(value.get("reason"))
+
+    if header_row_guess < 1:
+        header_row_guess = 1
+
+    return ProductFieldGuess(
+        field_name=field_name,
+        header_row_guess=header_row_guess,
+        confidence=confidence,
+        reason=reason,
+    )
 
 
 def parse_product_mapping_result(text: str) -> ProductMappingResult:
@@ -221,6 +274,18 @@ def safe_string(value: object) -> str:
         return ""
     # str(...)：把数字等内容转为文本；strip(...)：去掉首尾空白。
     return str(value).strip()
+
+
+def safe_int(value: object, default: int = 0) -> int:
+    """把任意值安全转换成整数，失败时返回默认值。"""
+
+    if value is None:
+        return default
+    try:
+        # int(...)：把数字字符串或数字转换为整数。
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def safe_float(value: object) -> float:

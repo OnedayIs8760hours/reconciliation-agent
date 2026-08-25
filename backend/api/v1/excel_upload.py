@@ -8,6 +8,7 @@ from agent.llm import ReconciliationLLMAgent
 from agent.llm_providers import LLMProviderError
 from backend.services.product_mapping_service import ProductMappingService
 from tools import ExcelSheetPreview, excel_tool
+from config import Config
 
 router = APIRouter(
     prefix="/api/reconciliation",
@@ -147,7 +148,14 @@ def _build_product_mapping(a_file_path: Path, b_file_path: Path) -> dict[str, ob
 
     try:
         # ProductMappingService(...)：创建商品映射服务，服务内部负责读列、去重、调用 LLM。
-        service = ProductMappingService(llm_agent=ReconciliationLLMAgent(provider="deepseek"))
+        service = ProductMappingService(
+            llm_agent=ReconciliationLLMAgent(
+                provider="deepseek",
+                model="deepseek-v4-pro",
+                base_url=Config.DEEPSEEK_BASE_URL,
+                api_key_env="DEEPSEEK_API_KEY",
+            )
+        )
         return service.build_product_mapping(a_file_path, b_file_path)
     except LLMProviderError as exc:
         raise HTTPException(status_code=500, detail=f"商品映射 LLM 分析失败：{exc}") from exc

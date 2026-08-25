@@ -95,6 +95,102 @@ class ReconciliationLLMAgent:
             f"A 表预览 JSON：\n{preview_json}"
         )
 
+    def analyze_sheet_structure(
+        self,
+        a_preview: ExcelSheetPreview,
+        b_preview: ExcelSheetPreview,
+        max_tokens: int = 2048,
+    ) -> LLMResponse:
+        """让 LLM 分析 A 表和 B 表的结构，并识别商品相关字段。"""
+
+        prompt = self.build_sheet_structure_prompt(a_preview, b_preview)
+        return self.complete(prompt, max_tokens=max_tokens)
+
+    def build_sheet_structure_prompt(
+        self,
+        a_preview: ExcelSheetPreview,
+        b_preview: ExcelSheetPreview,
+    ) -> str:
+        """把 A/B 表结构转换成稳定的 LLM 输入文本。"""
+
+        payload = {
+            "a_sheet": {
+                "sheet_name": a_preview.sheet_name,
+                "max_row": a_preview.max_row,
+                "max_column": a_preview.max_column,
+                "sample_rows": [
+                    {
+                        "row_number": row.row_number,
+                        "cells": [
+                            {
+                                "coordinate": cell.coordinate,
+                                "column": cell.column,
+                                "value": cell.display_text,
+                                "python_type": cell.python_type,
+                                "excel_data_type": cell.excel_data_type,
+                                "number_format": cell.number_format,
+                                "is_date": cell.is_date,
+                            }
+                            for cell in row.cells
+                        ],
+                    }
+                    for row in a_preview.rows
+                ],
+            },
+            "b_sheet": {
+                "sheet_name": b_preview.sheet_name,
+                "max_row": b_preview.max_row,
+                "max_column": b_preview.max_column,
+                "sample_rows": [
+                    {
+                        "row_number": row.row_number,
+                        "cells": [
+                            {
+                                "coordinate": cell.coordinate,
+                                "column": cell.column,
+                                "value": cell.display_text,
+                                "python_type": cell.python_type,
+                                "excel_data_type": cell.excel_data_type,
+                                "number_format": cell.number_format,
+                                "is_date": cell.is_date,
+                            }
+                            for cell in row.cells
+                        ],
+                    }
+                    for row in b_preview.rows
+                ],
+            },
+        }
+        structure_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+        return (
+            "你是一个 Excel 商品字段结构分析助手。\n"
+            "现在要先根据 A 表和 B 表的结构，识别每张表里最可能的商品字段。\n\n"
+            "重要原则：\n"
+            "1. 不要假设字段名固定，必须根据表头和样例判断。\n"
+            "2. 只能返回表头里真实存在的字段名称，字段名要尽量原样返回。\n"
+            "3. 如果表里有表头行，请判断 header_row_guess；如果不确定，也要给出最可能的行号。\n"
+            "4. A 表通常是型号、产品名称、商品名称、规格名称这类字段；B 表通常是规格、规格值、商品规格这类字段。\n"
+            "5. 如果看不出来，就把 confidence 调低，并把 field_name 留空。\n"
+            "6. 请只输出 JSON，不要输出 Markdown 代码块，不要输出解释文字。\n\n"
+            "JSON 结构必须是：\n"
+            "{\n"
+            "  \"a_sheet\": {\n"
+            "    \"header_row_guess\": 1,\n"
+            "    \"field_name\": \"产品名称\",\n"
+            "    \"confidence\": 0.95,\n"
+            "    \"reason\": \"为什么认为这是 A 表商品字段\"\n"
+            "  },\n"
+            "  \"b_sheet\": {\n"
+            "    \"header_row_guess\": 1,\n"
+            "    \"field_name\": \"规格\",\n"
+            "    \"confidence\": 0.95,\n"
+            "    \"reason\": \"为什么认为这是 B 表商品字段\"\n"
+            "  }\n"
+            "}\n\n"
+            f"A/B 表结构 JSON：\n{structure_json}"
+        )
+
     def analyze_product_mapping(
         self,
         a_products: list[str],

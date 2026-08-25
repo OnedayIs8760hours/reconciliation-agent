@@ -4,6 +4,51 @@ from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
+class ProductFieldGuess:
+    """LLM 识别出来的商品字段信息。"""
+
+    field_name: str = ""
+    header_row_guess: int = 1
+    confidence: float = 0.0
+    reason: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """把字段识别结果转成可以直接写入 JSON 的字典。"""
+
+        return {
+            "field_name": self.field_name,
+            "header_row_guess": self.header_row_guess,
+            "confidence": self.confidence,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
+class ProductStructureResult:
+    """A/B 表商品字段结构识别结果。"""
+
+    a_sheet: ProductFieldGuess = field(default_factory=ProductFieldGuess)
+    b_sheet: ProductFieldGuess = field(default_factory=ProductFieldGuess)
+    raw_text: str = ""
+    parse_error: str = ""
+
+    def to_dict(self) -> dict[str, object]:
+        """把结构识别结果转成可以直接写入 JSON 的字典。"""
+
+        payload: dict[str, object] = {
+            "a_sheet": self.a_sheet.to_dict(),
+            "b_sheet": self.b_sheet.to_dict(),
+        }
+
+        if self.raw_text:
+            payload["raw_text"] = self.raw_text
+        if self.parse_error:
+            payload["parse_error"] = self.parse_error
+
+        return payload
+
+
+@dataclass(frozen=True)
 class ProductMappingItem:
     """商品标准映射项。"""
 
