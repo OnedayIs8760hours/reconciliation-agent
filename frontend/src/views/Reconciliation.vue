@@ -8,8 +8,8 @@ import CoverageStatistics from '@/components/CoverageStatistics.vue'
 import ResultDownload from '@/components/ResultDownload.vue'
 import ExceptionDrawer from '@/components/ExceptionDrawer.vue'
 import { initialTask, uploadReconciliationFiles } from '@/api/reconciliation'
-import type { ExcelSheetPreview, ExcelLlmAnalysisResult, ProductMappingResponse } from '@/api/reconciliation'
-import type { ReconciliationTask } from '@/types/reconciliation'
+import type { ExcelSheetPreview, ExcelLlmAnalysisResult, ProductMappingResponse, UploadReconciliationResponse } from '@/api/reconciliation'
+import type { DownloadFile, ExceptionRecord, ProgressStep, ReconciliationTask, TaskStatus, VerifyMetric } from '@/types/reconciliation'
 
 const task = reactive<ReconciliationTask>(structuredClone(initialTask))
 const month = ref('2026-07')
@@ -57,6 +57,90 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function getProgressSteps(status: TaskStatus): ProgressStep[] {
+  const finalStatus: ProgressStep['status'] = status === 'SUCCESS' ? 'done' : 'failed'
+  return [
+    { id: 1, title: '文件检查', status: 'done' as const },
+    { id: 2, title: '生成 C 表底稿', status: 'done' as const },
+    { id: 3, title: 'A/B 数据匹配', status: 'done' as const },
+    { id: 4, title: 'B 表反向核查', status: 'done' as const },
+    { id: 5, title: '最终验收', status: finalStatus },
+  ]
+}
+
+function buildVerifyMetrics(response: UploadReconciliationResponse): VerifyMetric[] {
+  if (!response.verify_report?.items?.length) {
+    return initialTask.verifyMetrics.map((metric) => ({ ...metric }))
+  }
+
+  return response.verify_report.items.map((item) => ({
+    label: item.name,
+    value: formatMetricValue(item.value),
+    passed: item.passed,
+    hint: item.message,
+  }))
+}
+
+function formatMetricValue(value: unknown): string | number {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return '-'
+  return JSON.stringify(value)
+}
+
+function buildExceptions(response: UploadReconciliationResponse): ExceptionRecord[] {
+  if (!Array.isArray(response.exceptions)) return []
+
+  const result: ExceptionRecord[] = []
+  for (const item of response.exceptions) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    result.push({
+      id: textValue(record.id),
+      row: numberValue(record.row),
+      systemTime: textValue(record.systemTime),
+      documentNo: textValue(record.documentNo),
+      sku: textValue(record.sku),
+      productName: textValue(record.productName),
+      spec: textValue(record.spec),
+      quantity: numberValue(record.quantity),
+      unitCost: numberValue(record.unitCost),
+      amount: numberValue(record.amount),
+      type: textValue(record.type),
+      reason: textValue(record.reason),
+    })
+  }
+  return result
+}
+
+function buildDownloads(response: UploadReconciliationResponse): DownloadFile[] {
+  if (!Array.isArray(response.downloads)) {
+    return initialTask.downloads.map((file) => ({ ...file }))
+  }
+
+  return response.downloads.map((file) => ({
+    id: file.id,
+    name: file.name,
+    type: file.type,
+    enabled: file.enabled,
+    url: file.url,
+  }))
+}
+
+function textValue(value: unknown) {
+  if (value === null || value === undefined) return ''
+  return String(value)
+}
+
+function numberValue(value: unknown) {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return 0
+}
+
 async function startReconciliation() {
   if (!canStart.value || !aFileObject.value || !bFileObject.value) return
 
@@ -71,24 +155,36 @@ async function startReconciliation() {
   }
 
   try {
-    const response = await uploadReconciliationFiles(aFileObject.value, bFileObject.value)
+    const response = await uploadReconciliationFiles(aFileObject.value, bFileObject.value, month.value)
 
     task.id = response.task_id
     task.status = response.status
-    task.title = `${response.task_id} · A表已完成 LLM 行数分析`
-    task.month = month.value
-    aPreview.value = response.a_preview
-    llmAnalysis.value = response.llm_result
-    productMapping.value = response.product_mapping
-    task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
+    task.title = `${response.task_id} · ${response.status === 'SUCCESS' ? '正式对账验收通过' : '正式对账验收未通过'}`
+    task.month = response.month || month.value
+    task.progressSteps = getProgressSteps(response.status)
     task.progressDetail = {
-      currentText: `LLM 判断 A 表数据行数：${response.llm_result.row_count_guess ?? '未能确定'}`,
-      progress: 20,
-      processedCRecords: 0,
-      totalCRecords: Number(response.llm_result.row_count_guess) || 0,
-      matchedBRecords: 0,
-      manualReviewCount: 0,
+      currentText: response.status === 'SUCCESS' ? '核查通过，生成文件可下载' : '核查未通过，请查看验收指标和异常明细',
+      progress: 100,
+      processedCRecords: response.match_summary?.total_a_records ?? 0,
+      totalCRecords: response.match_summary?.total_a_records ?? 0,
+      matchedBRecords: response.match_summary?.matched_b_records ?? 0,
+      manualReviewCount: response.match_summary?.need_review_count ?? 0,
     }
+    task.verifyMetrics = buildVerifyMetrics(response)
+    task.coverage = {
+      monthlyRecords: response.reverse_verify_summary?.monthly_records ?? 0,
+      acceptedByC: response.reverse_verify_summary?.accepted_by_c ?? 0,
+      markedMissing: response.reverse_verify_summary?.marked_missing ?? 0,
+      manuallyExcluded: response.reverse_verify_summary?.manually_excluded ?? 0,
+      unexplained: response.reverse_verify_summary?.unexplained ?? 0,
+    }
+    task.exceptions = buildExceptions(response)
+    task.downloads = buildDownloads(response)
+    task.createdAt = response.created_at ?? task.createdAt
+    task.completedAt = response.completed_at
+    aPreview.value = response.a_preview
+    llmAnalysis.value = response.llm_result as ExcelLlmAnalysisResult
+    productMapping.value = response.product_mapping
   } catch (error) {
     task.status = 'FAILED'
     task.title = '文件上传失败'
@@ -128,11 +224,14 @@ async function startReconciliation() {
       <ReconciliationSettings v-model:month="month" :can-start="canStart" :running="running" @start="startReconciliation" />
 
       <section v-if="aPreview && llmAnalysis" class="panel-card upload-result-card">
-        <div class="upload-status success">A 表 LLM 预览分析完成</div>
-        <p class="muted small">Sheet：{{ aPreview.sheet_name }} ｜ 最大行数：{{ aPreview.max_row }} ｜ 最大列数：{{ aPreview.max_column }}</p>
-        <p class="muted small">LLM 估算行数：{{ llmAnalysis.row_count_guess ?? '未能确定' }}</p>
-        <p class="muted small">置信度：{{ llmAnalysis.confidence ?? '-' }}</p>
-        <p class="muted small">原因：{{ llmAnalysis.reason ?? llmAnalysis.raw_text ?? '-' }}</p>
+        <div class="upload-status success">A/B 表完整结构识别完成</div>
+        <p class="muted small">A Sheet：{{ aPreview.sheet_name }} ｜ 最大行数：{{ aPreview.max_row }} ｜ 最大列数：{{ aPreview.max_column }}</p>
+        <p class="muted small">字段识别、C 表制表、匹配和强制验收结果已写入任务 JSON。</p>
+
+        <details class="mapping-json-block">
+          <summary>完整字段识别 JSON</summary>
+          <pre>{{ formatJson(llmAnalysis) }}</pre>
+        </details>
       </section>
 
       <section v-if="productMapping" class="panel-card upload-result-card">

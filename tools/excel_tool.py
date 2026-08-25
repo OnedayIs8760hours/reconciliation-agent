@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
@@ -122,13 +123,13 @@ class ExcelTool:
         file_path: str | Path,
         *,
         sheet_name: str | None = None,
-        rows: int = 8,
+        rows: int | None = None,
         start_row: int = 1,
         max_columns: int | None = None,
         data_only: bool = True,
         skip_empty_tail_columns: bool = True,
     ) -> ExcelSheetPreview:
-        """读取工作表前几行，方便 LLM 判断 Excel 数据长什么样。
+        """读取工作表样例行，方便 LLM 判断 Excel 数据长什么样。
 
         这个方法不假设哪一行是表头，只按原始行号返回样例数据，并保留单元格值、
         Python 类型、Excel 数据类型和数字格式，适合传给 LLM 做：
@@ -138,7 +139,7 @@ class ExcelTool:
         - 生成后续读取参数
         """
 
-        if rows < 1:
+        if rows is not None and rows < 1:
             raise ValueError("rows 必须大于等于 1")
         if start_row < 1:
             raise ValueError("start_row 必须大于等于 1")
@@ -147,7 +148,8 @@ class ExcelTool:
 
         workbook = self.load_workbook(file_path, data_only=data_only)
         worksheet = self.get_sheet(workbook, sheet_name)
-        end_row = min(worksheet.max_row, start_row + rows - 1)
+        row_count = rows if rows is not None else worksheet.max_row
+        end_row = min(worksheet.max_row, start_row + row_count - 1)
         end_col = min(worksheet.max_column, max_columns) if max_columns else worksheet.max_column
 
         preview_rows: list[ExcelPreviewRow] = []
@@ -471,7 +473,91 @@ class ExcelTool:
                 max_width,
             )
 
+    def copy_workbook(self, source_file_path: str | Path, target_file_path: str | Path) -> Path:
+        """完整复制一个 Excel 工作簿，作为 C 表底稿。"""
+
+        # load_workbook(...)：打开源文件，保留样式和工作表结构。
+        workbook = self.load_workbook(source_file_path, data_only=False)
+        # save_workbook(...)：保存到新路径，避免修改用户上传的 A 表原件。
+        return self.save_workbook(workbook, target_file_path)
+
+    def unmerge_cells_and_fill_values(self, worksheet: Worksheet) -> None:
+        """取消合并单元格，并把左上角的值填充到原合并区域每个单元格。"""
+
+        # list(...)：先复制合并区域列表，避免循环时修改集合导致异常。
+        ranges = list(worksheet.merged_cells.ranges)
+        for merged_range in ranges:
+            min_row = merged_range.min_row
+            max_row = merged_range.max_row
+            min_col = merged_range.min_col
+            max_col = merged_range.max_col
+            top_left_cell = worksheet.cell(row=min_row, column=min_col)
+            top_left_value = top_left_cell.value
+
+            # unmerge_cells(...)：取消当前合并区域。
+            worksheet.unmerge_cells(str(merged_range))
+
+            for row_index in range(min_row, max_row + 1):
+                for column_index in range(min_col, max_col + 1):
+                    target_cell = worksheet.cell(row=row_index, column=column_index)
+                    target_cell.value = top_left_value
+
+    def clear_sheet_fill(self, worksheet: Worksheet) -> None:
+        """清除工作表单元格底色，避免 A 表原底色干扰 C 表状态标记。"""
+
+        empty_fill = PatternFill(fill_type=None)
+        for row in worksheet.iter_rows():
+            for cell in row:
+                # copy(...)：给每个单元格一个独立样式对象，避免共享样式被误改。
+                cell.fill = copy(empty_fill)
+
+    def format_date_column_as_month_day(self, worksheet: Worksheet, column_index: int, start_row: int, end_row: int) -> None:
+        """把日期列显示格式设置成 7月1日 这样的格式。"""
+
+        if column_index < 1:
+            return
+
+        for row_index in range(start_row, end_row + 1):
+            cell = worksheet.cell(row=row_index, column=column_index)
+            if cell.value is None:
+                continue
+            # number_format：设置 Excel 显示格式，不改变真实日期值。
+            cell.number_format = 'm"月"d"日"'
+
+    def reset_view(self, worksheet: Worksheet, header_row: int = 1) -> None:
+        """把工作表打开视图复位到 A1，并冻结表头下一行。"""
+
+        if header_row < 1:
+            header_row = 1
+        # freeze_panes：冻结表头下一行，方便人工复核时滚动查看。
+        worksheet.freeze_panes = worksheet.cell(row=header_row + 1, column=1).coordinate
+        # sheet_view.selection：控制打开文件时选中的单元格。
+        if worksheet.sheet_view.selection:
+            selection = worksheet.sheet_view.selection[0]
+            selection.activeCell = "A1"
+            selection.sqref = "A1"
+        # topLeftCell：控制打开文件时左上角显示区域。
+        worksheet.sheet_view.topLeftCell = "A1"
+
+    def scan_formula_errors(self, worksheet: Worksheet) -> list[str]:
+        """扫描工作表里常见 Excel 公式错误。"""
+
+        error_words = ["#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A"]
+        errors: list[str] = []
+
+        for row in worksheet.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                text = str(cell.value)
+                for error_word in error_words:
+                    if error_word in text:
+                        errors.append(f"{cell.coordinate}: {error_word}")
+
+        return errors
+
     def infer_headers(self, records: Sequence[Record]) -> list[str]:
+        """从字典列表中按首次出现顺序推断表头。"""
         """从字典列表中按首次出现顺序推断表头。"""
 
         headers: list[str] = []

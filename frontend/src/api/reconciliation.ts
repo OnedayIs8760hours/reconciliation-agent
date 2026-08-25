@@ -82,6 +82,13 @@ export interface ProductStructureResult {
   parse_error?: string
 }
 
+export interface ProductMappingLookupPayload {
+  a_to_standard: Record<string, string>
+  b_to_standard: Record<string, string>
+  a_to_b_values: Record<string, string[]>
+  b_to_a_values: Record<string, string[]>
+}
+
 export interface ProductMappingResponse {
   structure: ProductStructureResult
   a_column_name: string
@@ -91,15 +98,77 @@ export interface ProductMappingResponse {
   llm_model: string
   llm_provider: string
   result: ProductMappingResultPayload
+  lookup?: ProductMappingLookupPayload
   summary: ProductMappingSummary
+}
+
+export interface VerifyReportItem {
+  name: string
+  passed: boolean
+  value: unknown
+  message: string
+}
+
+export interface VerifyReportPayload {
+  passed: boolean
+  items: VerifyReportItem[]
+  formula_errors: string[]
+  exceptions: unknown[]
+}
+
+export interface MatchSummaryPayload {
+  total_a_records: number
+  matched_a_records: number
+  matched_b_records: number
+  need_review_count: number
+  unmatched_count: number
+  inserted_rows: number
+  results?: unknown[]
+}
+
+export interface ReverseVerifySummaryPayload {
+  monthly_records: number
+  accepted_by_c: number
+  marked_missing: number
+  manually_excluded: number
+  unexplained: number
+  missing_records?: unknown[]
+}
+
+export interface BMissingMarkerPayload {
+  file_path: string
+  marked_count: number
+  marker_start_column: number
+  marker_headers: string[]
+}
+
+export interface DownloadPayload {
+  id: string
+  name: string
+  type: 'excel' | 'report'
+  enabled: boolean
+  url: string
 }
 
 export interface UploadReconciliationResponse {
   task_id: string
-  status: 'UPLOADED'
+  status: 'SUCCESS' | 'FAILED' | 'PROCESSING'
+  month: string
   a_preview: ExcelSheetPreview
-  llm_result: ExcelLlmAnalysisResult
+  b_preview?: ExcelSheetPreview
+  llm_result: ExcelLlmAnalysisResult | Record<string, unknown>
+  schema_result?: Record<string, unknown>
   product_mapping: ProductMappingResponse
+  c_table_result?: Record<string, unknown>
+  b_records?: unknown[]
+  match_summary?: MatchSummaryPayload
+  reverse_verify_summary?: ReverseVerifySummaryPayload
+  b_missing_marker?: BMissingMarkerPayload
+  verify_report?: VerifyReportPayload
+  exceptions?: unknown[]
+  downloads?: DownloadPayload[]
+  created_at?: string
+  completed_at?: string
 }
 
 export const initialTask: ReconciliationTask = {
@@ -275,10 +344,11 @@ export const failedTask: ReconciliationTask = {
 
 export const taskHistory: ReconciliationTask[] = [successfulTask, failedTask]
 
-export async function uploadReconciliationFiles(aFile: File, bFile: File): Promise<UploadReconciliationResponse> {
+export async function uploadReconciliationFiles(aFile: File, bFile: File, month: string): Promise<UploadReconciliationResponse> {
   const formData = new FormData()
   formData.append('a_file', aFile)
   formData.append('b_file', bFile)
+  formData.append('month', month)
 
   const response = await fetch(`${API_BASE_URL}/api/reconciliation/upload`, {
     method: 'POST',

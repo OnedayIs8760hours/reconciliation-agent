@@ -67,6 +67,7 @@ export interface DownloadFile {
   name: string
   type: 'excel' | 'report'
   enabled: boolean
+  url?: string
 }
 
 export interface ReconciliationTask {

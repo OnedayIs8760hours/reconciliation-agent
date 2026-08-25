@@ -15,6 +15,51 @@ from backend.domain.product_mapping import (
 from tools import excel_tool
 
 
+class ProductMappingLookup:
+    """把 LLM 商品映射结果整理成匹配时容易使用的查询表。"""
+
+    def __init__(self, mapping_result: ProductMappingResult) -> None:
+        """根据商品映射结果建立 A/B 原始值到标准商品的索引。"""
+
+        self.a_to_standard: dict[str, str] = {}
+        self.b_to_standard: dict[str, str] = {}
+        self.a_to_b_values: dict[str, list[str]] = {}
+        self.b_to_a_values: dict[str, list[str]] = {}
+
+        for item in mapping_result.mappings:
+            self.a_to_standard[item.a_value] = item.standard
+            self.b_to_standard[item.b_value] = item.standard
+            self.a_to_b_values.setdefault(item.a_value, []).append(item.b_value)
+            self.b_to_a_values.setdefault(item.b_value, []).append(item.a_value)
+
+    def get_a_standard(self, value: str) -> str:
+        """读取 A 表商品值对应的标准商品，找不到时返回原值。"""
+
+        return self.a_to_standard.get(value, value)
+
+    def get_b_standard(self, value: str) -> str:
+        """读取 B 表规格值对应的标准商品，找不到时返回原值。"""
+
+        return self.b_to_standard.get(value, value)
+
+    def is_match(self, a_value: str, b_value: str) -> bool:
+        """判断 A 商品值和 B 规格值是否属于同一个标准商品。"""
+
+        a_standard = self.get_a_standard(a_value)
+        b_standard = self.get_b_standard(b_value)
+        return a_standard == b_standard
+
+    def to_dict(self) -> dict[str, object]:
+        """把查询表转成 JSON 字典，方便写入 metadata。"""
+
+        return {
+            "a_to_standard": dict(self.a_to_standard),
+            "b_to_standard": dict(self.b_to_standard),
+            "a_to_b_values": dict(self.a_to_b_values),
+            "b_to_a_values": dict(self.b_to_a_values),
+        }
+
+
 class ProductMappingService:
     """商品规格去重与公共信息提取服务。"""
 
@@ -79,6 +124,7 @@ class ProductMappingService:
             "llm_model": llm_response.model,
             "llm_provider": llm_response.provider,
             "result": mapping_result.to_dict(),
+            "lookup": ProductMappingLookup(mapping_result).to_dict(),
             "summary": {
                 "a_unique_count": len(a_unique),
                 "b_unique_count": len(b_unique),

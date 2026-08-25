@@ -191,6 +191,115 @@ class ReconciliationLLMAgent:
             f"A/B 表结构 JSON：\n{structure_json}"
         )
 
+    def analyze_reconciliation_structure(
+        self,
+        a_preview: ExcelSheetPreview,
+        b_preview: ExcelSheetPreview,
+        max_tokens: int = 4096,
+    ) -> LLMResponse:
+        """让 LLM 分析 A/B 表完整对账字段结构。"""
+
+        prompt = self.build_reconciliation_structure_prompt(a_preview, b_preview)
+        return self.complete(prompt, max_tokens=max_tokens)
+
+    def build_reconciliation_structure_prompt(
+        self,
+        a_preview: ExcelSheetPreview,
+        b_preview: ExcelSheetPreview,
+    ) -> str:
+        """把 A/B 表预览转换成完整对账字段识别提示词。"""
+
+        payload = {
+            "a_sheet": {
+                "sheet_name": a_preview.sheet_name,
+                "max_row": a_preview.max_row,
+                "max_column": a_preview.max_column,
+                "sample_rows": [
+                    {
+                        "row_number": row.row_number,
+                        "cells": [
+                            {
+                                "coordinate": cell.coordinate,
+                                "column": cell.column,
+                                "value": cell.display_text,
+                                "python_type": cell.python_type,
+                                "excel_data_type": cell.excel_data_type,
+                                "number_format": cell.number_format,
+                                "is_date": cell.is_date,
+                            }
+                            for cell in row.cells
+                        ],
+                    }
+                    for row in a_preview.rows
+                ],
+            },
+            "b_sheet": {
+                "sheet_name": b_preview.sheet_name,
+                "max_row": b_preview.max_row,
+                "max_column": b_preview.max_column,
+                "sample_rows": [
+                    {
+                        "row_number": row.row_number,
+                        "cells": [
+                            {
+                                "coordinate": cell.coordinate,
+                                "column": cell.column,
+                                "value": cell.display_text,
+                                "python_type": cell.python_type,
+                                "excel_data_type": cell.excel_data_type,
+                                "number_format": cell.number_format,
+                                "is_date": cell.is_date,
+                            }
+                            for cell in row.cells
+                        ],
+                    }
+                    for row in b_preview.rows
+                ],
+            },
+        }
+        structure_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+        return (
+            "你是财务对账 Excel 字段结构分析助手。\n"
+            "请根据 A 表和 B 表的完整列结构预览，识别正式制表需要的字段。\n\n"
+            "重要要求：\n"
+            "1. 不能假设 A 表字段名固定，必须根据真实表头和样例判断。\n"
+            "2. 字段名必须返回表头中真实存在的文字；没有就留空。\n"
+            "3. A 表要识别日期、商品/规格、数量、单价、金额、单号、单位、备注。\n"
+            "4. B 表要识别仓库、系统出入库时间、单据编号、货品编号、货品名称、规格、入库数量、入库成本单价、入库成本金额、出库数量、出库成本单价、出库成本金额。\n"
+            "5. 请只输出 JSON，不要 Markdown，不要额外解释。\n\n"
+            "JSON 结构必须是：\n"
+            "{\n"
+            "  \"a_schema\": {\n"
+            "    \"sheet_name\": \"\", \"header_row\": 1, \"detail_start_row\": 2, \"detail_end_row\": 100,\n"
+            "    \"date_field\": {\"field_name\": \"日期\", \"column_index\": 1, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"product_field\": {\"field_name\": \"产品名称\", \"column_index\": 2, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"quantity_field\": {\"field_name\": \"数量\", \"column_index\": 3, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"unit_price_field\": {\"field_name\": \"单价\", \"column_index\": 4, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"amount_field\": {\"field_name\": \"金额\", \"column_index\": 5, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"document_no_field\": {\"field_name\": \"\", \"column_index\": 0, \"confidence\": 0, \"reason\": \"\"},\n"
+            "    \"unit_field\": {\"field_name\": \"\", \"column_index\": 0, \"confidence\": 0, \"reason\": \"\"},\n"
+            "    \"remark_field\": {\"field_name\": \"\", \"column_index\": 0, \"confidence\": 0, \"reason\": \"\"}\n"
+            "  },\n"
+            "  \"b_schema\": {\n"
+            "    \"sheet_name\": \"\", \"header_row\": 1, \"detail_start_row\": 2, \"detail_end_row\": 100,\n"
+            "    \"warehouse_field\": {\"field_name\": \"仓库\", \"column_index\": 1, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"system_time_field\": {\"field_name\": \"系统出入库时间\", \"column_index\": 2, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"document_no_field\": {\"field_name\": \"单据编号\", \"column_index\": 3, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"sku_field\": {\"field_name\": \"货品编号\", \"column_index\": 4, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"product_name_field\": {\"field_name\": \"货品名称\", \"column_index\": 5, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"spec_field\": {\"field_name\": \"规格\", \"column_index\": 6, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"inbound_quantity_field\": {\"field_name\": \"入库数量\", \"column_index\": 7, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"inbound_unit_price_field\": {\"field_name\": \"入库成本单价\", \"column_index\": 8, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"inbound_amount_field\": {\"field_name\": \"入库成本金额\", \"column_index\": 9, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"outbound_quantity_field\": {\"field_name\": \"出库数量\", \"column_index\": 10, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"outbound_unit_price_field\": {\"field_name\": \"出库成本单价\", \"column_index\": 11, \"confidence\": 0.9, \"reason\": \"\"},\n"
+            "    \"outbound_amount_field\": {\"field_name\": \"出库成本金额\", \"column_index\": 12, \"confidence\": 0.9, \"reason\": \"\"}\n"
+            "  }\n"
+            "}\n\n"
+            f"A/B 表结构 JSON：\n{structure_json}"
+        )
+
     def analyze_product_mapping(
         self,
         a_products: list[str],
