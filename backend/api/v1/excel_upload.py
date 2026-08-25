@@ -7,6 +7,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from agent.llm import ReconciliationLLMAgent
 from agent.llm_providers import LLMProviderError
 from tools import ExcelSheetPreview, excel_tool
+from config import Config
 
 router = APIRouter(
     prefix="/api/reconciliation",
@@ -127,7 +128,8 @@ def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dic
         raise HTTPException(status_code=400, detail=f"A表解析失败：{exc}") from exc
 
     try:
-        llm_response = ReconciliationLLMAgent(provider="deepseek", base_url="https://api.deepseek.com", api_key="sk-6bc6ae4ebb36490c9766ed5bf2b9a7a1").analyze_excel_preview(preview)
+        llm_response = ReconciliationLLMAgent(provider="deepseek", base_url=Config.DEEPSEEK_BASE_URL, api_key=Config.DEEPSEEK_API_KEY).analyze_excel_preview(preview)
+        # llm_response = ReconciliationLLMAgent(provider="deepseek", base_url="https://api.deepseek.com").analyze_excel_preview(preview)
     except LLMProviderError as exc:
         raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
     except Exception as exc:
