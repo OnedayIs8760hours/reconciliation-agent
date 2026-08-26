@@ -148,8 +148,10 @@ def test_product_mapping_service_reports_empty_llm_field(tmp_path: Path) -> None
         raise AssertionError("LLM 字段为空时应该抛出 ValueError")
 
 
-def test_product_mapping_service_matches_identical_values_without_llm_mapping(tmp_path: Path) -> None:
-    """完全相同的 A/B 规格应由程序直接关联，不依赖 LLM 是否返回映射。"""
+def test_product_mapping_service_does_not_match_identical_values_without_llm_mapping(
+    tmp_path: Path,
+) -> None:
+    """a_b_intersection 应只来自 LLM 返回的 mappings，不应自行补完全匹配。"""
 
     class EmptyMappingAgent(FakeProductMappingAgent):
         def analyze_product_mapping(self, a_products: list[str], b_products: list[str]) -> LLMResponse:
@@ -174,14 +176,16 @@ def test_product_mapping_service_matches_identical_values_without_llm_mapping(tm
     result = service.build_product_mapping(a_file_path, b_file_path)
 
     assert result["a_b_intersection"] == {
-        "matched": [{"a": "商品A", "b": "商品A"}],
-        "a_unmatched": ["商品B"],
-        "b_unused": ["商品C"],
+        "matched": [],
+        "a_unmatched": ["商品A", "商品B"],
+        "b_unused": ["商品A", "商品C"],
     }
 
 
-def test_product_mapping_service_falls_back_when_llm_returns_empty_text(tmp_path: Path) -> None:
-    """商品映射 LLM 空返回时，服务应使用保守规则完成可确定的匹配。"""
+def test_product_mapping_service_does_not_fallback_when_llm_returns_empty_text(
+    tmp_path: Path,
+) -> None:
+    """商品映射 LLM 空返回时，不应写死规则或本地生成 mappings。"""
 
     class EmptyTextMappingAgent(FakeProductMappingAgent):
         def analyze_sheet_structure(self, a_preview: object, b_preview: object) -> LLMResponse:
@@ -222,15 +226,19 @@ def test_product_mapping_service_falls_back_when_llm_returns_empty_text(tmp_path
     result = service.build_product_mapping(a_file_path, b_file_path)
 
     assert result["a_b_intersection"] == {
-        "matched": [
-            {"a": "XN6012-奶油色-带字款", "b": "XN6012-奶油色-带字款"},
-            {
-                "a": "WK9648-红箱-毛衣狗-M-鹿角",
-                "b": "WK9648-收纳箱-红箱-毛衣狗-M-鹿角",
-            },
+        "matched": [],
+        "a_unmatched": [
+            "XN6012-奶油色-带字款",
+            "WK9648-红箱-毛衣狗-M-鹿角",
+            "WK9648-收纳箱-红箱-小熊-M圆角",
         ],
-        "a_unmatched": ["WK9648-收纳箱-红箱-小熊-M圆角"],
-        "b_unused": ["WK9648-收纳箱-红箱-毛衣狗-M-圆角"],
+        "b_unused": [
+            "XN6012-奶油色-带字款",
+            "WK9648-收纳箱-红箱-毛衣狗-M-鹿角",
+            "WK9648-收纳箱-红箱-毛衣狗-M-圆角",
+        ],
     }
-    assert result["summary"]["mapping_count"] == 2  # type: ignore[index]
+    assert result["result"]["normalization_rules"] == {}  # type: ignore[index]
+    assert result["result"]["mappings"] == []  # type: ignore[index]
+    assert result["summary"]["mapping_count"] == 0  # type: ignore[index]
     assert result["result"]["parse_error"] == "LLM 返回内容不是合法 JSON"  # type: ignore[index]

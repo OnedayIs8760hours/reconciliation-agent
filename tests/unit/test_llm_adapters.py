@@ -178,6 +178,15 @@ def test_agent_accepts_injected_adapter_and_exposes_model() -> None:
     assert adapter.max_tokens == 12
 
 
+def test_product_mapping_uses_large_default_output_budget() -> None:
+    adapter = FakeAdapter()
+    llm_agent = ReconciliationLLMAgent(provider="openai", adapter=adapter)
+
+    llm_agent.analyze_product_mapping(["商品A"], ["商品A"])
+
+    assert adapter.max_tokens == 40960
+
+
 def test_claude_compat_agent_defaults_to_anthropic_with_injected_adapter() -> None:
     adapter = FakeAdapter()
     llm_agent = ClaudeReconciliationAgent(adapter=adapter)

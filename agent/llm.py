@@ -195,7 +195,7 @@ class ReconciliationLLMAgent:
         self,
         a_products: list[str],
         b_products: list[str],
-        max_tokens: int = 4096,
+        max_tokens: int = 40960,
     ) -> LLMResponse:
         """让 LLM 分析 A/B 商品规格，并返回商品映射 JSON。"""
 
