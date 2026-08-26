@@ -67,7 +67,6 @@ class ProductMappingItem:
             "a_value": self.a_value,
             "b_value": self.b_value,
             "confidence": self.confidence,
-            "reason": self.reason,
         }
 
 
@@ -87,7 +86,6 @@ class ProductReviewItem:
             "a_value": self.a_value,
             "b_value": self.b_value,
             "confidence": self.confidence,
-            "reason": self.reason,
         }
 
 

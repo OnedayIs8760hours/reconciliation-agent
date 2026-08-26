@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -46,8 +47,7 @@ class FakeProductMappingAgent:
               "standard": "商品A",
               "a_value": "商品A",
               "b_value": "商品A",
-              "confidence": 1.0,
-              "reason": "名称完全一致"
+              "confidence": 1.0
             }
           ],
           "unmatched_a": ["商品B"],
@@ -115,6 +115,8 @@ def test_product_mapping_service_uses_llm_guessed_fields(tmp_path: Path) -> None
         "a_unmatched": ["商品B"],
         "b_unused": ["商品C"],
     }
+    mapping_item = result["result"]["mappings"][0]  # type: ignore[index]
+    assert "reason" not in mapping_item
     assert result["summary"]["mapping_count"] == 1  # type: ignore[index]
 
 
@@ -241,4 +243,52 @@ def test_product_mapping_service_does_not_fallback_when_llm_returns_empty_text(
     assert result["result"]["normalization_rules"] == {}  # type: ignore[index]
     assert result["result"]["mappings"] == []  # type: ignore[index]
     assert result["summary"]["mapping_count"] == 0  # type: ignore[index]
-    assert result["result"]["parse_error"] == "LLM 返回内容不是合法 JSON"  # type: ignore[index]
+    assert "第 1 批" in result["result"]["parse_error"]  # type: ignore[index]
+    assert "LLM 返回内容不是合法 JSON" in result["result"]["parse_error"]  # type: ignore[index]
+
+
+def test_product_mapping_service_batches_a_products_by_twenty() -> None:
+    """商品映射应按 A 表每 20 个一批调用 LLM，并合并每批 mappings。"""
+
+    class BatchAgent:
+        provider = "deepseek"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.a_batches: list[list[str]] = []
+            self.b_batches: list[list[str]] = []
+
+        def analyze_product_mapping(self, a_products: list[str], b_products: list[str]) -> LLMResponse:
+            self.a_batches.append(list(a_products))
+            self.b_batches.append(list(b_products))
+            mappings = [
+                {
+                    "a_value": a_value,
+                    "b_value": a_value,
+                    "confidence": 1.0,
+                }
+                for a_value in a_products
+                if a_value in b_products
+            ]
+            text = (
+                "{"
+                "\"mappings\": "
+                f"{json.dumps(mappings, ensure_ascii=False)}, "
+                "\"need_review\": []"
+                "}"
+            )
+            return LLMResponse(text=text, model=self.model, provider=self.provider)
+
+    a_unique = [f"商品{i:02d}" for i in range(45)]
+    b_unique = list(a_unique)
+    agent = BatchAgent()
+    service = ProductMappingService(llm_agent=agent)  # type: ignore[arg-type]
+
+    mapping_result, _, _ = service.analyze_product_mapping_in_batches(a_unique, b_unique)
+
+    assert [len(batch) for batch in agent.a_batches] == [20, 20, 5]
+    assert [len(batch) for batch in agent.b_batches] == [45, 25, 5]
+    assert mapping_result.mapping_count == 45
+    assert mapping_result.unmatched_a == []
+    assert mapping_result.unmatched_b == []
+    assert "reason" not in mapping_result.mappings[0].to_dict()

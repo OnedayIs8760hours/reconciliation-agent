@@ -39,14 +39,12 @@ export interface ProductMappingItem {
   a_value: string
   b_value: string
   confidence: number
-  reason: string
 }
 
 export interface ProductReviewItem {
   a_value: string
   b_value: string
   confidence: number
-  reason: string
 }
 
 export interface ProductMappingResultPayload {

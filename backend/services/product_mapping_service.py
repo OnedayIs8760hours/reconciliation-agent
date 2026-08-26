@@ -14,6 +14,8 @@ from backend.domain.product_mapping import (
 )
 from tools import excel_tool
 
+PRODUCT_MAPPING_BATCH_SIZE = 20
+
 
 class ProductMappingService:
     """商品规格去重与公共信息提取服务。"""
@@ -66,10 +68,11 @@ class ProductMappingService:
             sheet_name=b_sheet_name,
             header_row=structure_result.b_sheet.header_row_guess,
         )
-        # analyze_product_mapping(...)：把去重后的商品列表交给 LLM 做语义匹配。
-        llm_response = self.llm_agent.analyze_product_mapping(a_unique, b_unique)
-        
-        mapping_result = parse_product_mapping_result(llm_response.text)
+        # 把 A 表商品按批交给 LLM 做语义匹配，避免一次输出过长导致 JSON 截断。
+        mapping_result, llm_model, llm_provider = self.analyze_product_mapping_in_batches(
+            a_unique,
+            b_unique,
+        )
         # 从 LLM 返回的 mappings 字段生成 A/B 匹配结果。
         a_b_intersection = build_a_b_intersection(a_unique, b_unique, mapping_result)
 
@@ -80,8 +83,8 @@ class ProductMappingService:
             "a_unique": a_unique,
             "b_unique": b_unique,
             "a_b_intersection": a_b_intersection,
-            "llm_model": llm_response.model,
-            "llm_provider": llm_response.provider,
+            "llm_model": llm_model,
+            "llm_provider": llm_provider,
             "result": mapping_result.to_dict(),
             "summary": {
                 "a_unique_count": len(a_unique),
@@ -92,6 +95,83 @@ class ProductMappingService:
                 "need_review_count": mapping_result.review_count,
             },
         }
+
+    def analyze_product_mapping_in_batches(
+        self,
+        a_unique: list[str],
+        b_unique: list[str],
+        *,
+        batch_size: int = PRODUCT_MAPPING_BATCH_SIZE,
+    ) -> tuple[ProductMappingResult, str, str]:
+        """按 A 表商品分批调用 LLM，并把每批 mappings 合并成一个结果。"""
+
+        if batch_size < 1:
+            raise ValueError("batch_size 必须大于等于 1")
+
+        all_mappings: list[ProductMappingItem] = []
+        all_need_review: list[ProductReviewItem] = []
+        used_a_values: set[str] = set()
+        used_b_values: set[str] = set()
+        raw_batches: list[dict[str, object]] = []
+        parse_errors: list[str] = []
+        llm_model = safe_string(getattr(self.llm_agent, "model", ""))
+        llm_provider = safe_string(getattr(self.llm_agent, "provider", ""))
+
+        for batch_index, a_batch in enumerate(chunk_list(a_unique, batch_size), start=1):
+            b_candidates = [b_value for b_value in b_unique if b_value not in used_b_values]
+            llm_response = self.llm_agent.analyze_product_mapping(a_batch, b_candidates)
+            llm_model = llm_response.model
+            llm_provider = llm_response.provider
+
+            batch_result = parse_product_mapping_result(llm_response.text)
+            raw_batch: dict[str, object] = {
+                "batch_index": batch_index,
+                "a_start": (batch_index - 1) * batch_size,
+                "a_count": len(a_batch),
+                "raw_text": llm_response.text,
+            }
+            if batch_result.parse_error:
+                raw_batch["parse_error"] = batch_result.parse_error
+                parse_errors.append(f"第 {batch_index} 批：{batch_result.parse_error}")
+            raw_batches.append(raw_batch)
+
+            a_batch_values = set(a_batch)
+            b_candidate_values = set(b_candidates)
+            for item in batch_result.mappings:
+                if item.a_value not in a_batch_values:
+                    continue
+                if item.b_value not in b_candidate_values:
+                    continue
+                if item.a_value in used_a_values or item.b_value in used_b_values:
+                    continue
+                all_mappings.append(item)
+                used_a_values.add(item.a_value)
+                used_b_values.add(item.b_value)
+
+            for item in batch_result.need_review:
+                if item.a_value and item.a_value not in a_batch_values:
+                    continue
+                if item.b_value and item.b_value not in b_candidate_values:
+                    continue
+                all_need_review.append(item)
+
+        unmatched_a = [a_value for a_value in a_unique if a_value not in used_a_values]
+        unmatched_b = [b_value for b_value in b_unique if b_value not in used_b_values]
+        raw_text = json.dumps({"batches": raw_batches}, ensure_ascii=False, indent=2)
+        parse_error = "；".join(parse_errors)
+
+        return (
+            ProductMappingResult(
+                mappings=all_mappings,
+                unmatched_a=unmatched_a,
+                unmatched_b=unmatched_b,
+                need_review=all_need_review,
+                raw_text=raw_text,
+                parse_error=parse_error,
+            ),
+            llm_model,
+            llm_provider,
+        )
 
     def guess_product_fields(
         self,
@@ -155,6 +235,12 @@ def parse_field_guess(value: object) -> ProductFieldGuess:
         confidence=confidence,
         reason=reason,
     )
+
+
+def chunk_list(values: list[str], size: int) -> list[list[str]]:
+    """按固定大小切分列表。"""
+
+    return [values[index : index + size] for index in range(0, len(values), size)]
 
 
 def parse_product_mapping_result(text: str) -> ProductMappingResult:
@@ -270,11 +356,10 @@ def parse_mapping_items(value: object) -> list[ProductMappingItem]:
         if not isinstance(item, dict):
             continue
 
-        standard = safe_string(item.get("standard"))
         a_value = safe_string(item.get("a_value"))
         b_value = safe_string(item.get("b_value"))
         confidence = safe_float(item.get("confidence"))
-        reason = safe_string(item.get("reason"))
+        standard = safe_string(item.get("standard")) or a_value
 
         if not standard or not a_value or not b_value:
             continue
@@ -284,7 +369,6 @@ def parse_mapping_items(value: object) -> list[ProductMappingItem]:
             a_value=a_value,
             b_value=b_value,
             confidence=confidence,
-            reason=reason,
         )
         result.append(mapping_item)
 
@@ -305,7 +389,6 @@ def parse_review_items(value: object) -> list[ProductReviewItem]:
         a_value = safe_string(item.get("a_value"))
         b_value = safe_string(item.get("b_value"))
         confidence = safe_float(item.get("confidence"))
-        reason = safe_string(item.get("reason"))
 
         if not a_value and not b_value:
             continue
@@ -314,7 +397,6 @@ def parse_review_items(value: object) -> list[ProductReviewItem]:
             a_value=a_value,
             b_value=b_value,
             confidence=confidence,
-            reason=reason,
         )
         result.append(review_item)
 
