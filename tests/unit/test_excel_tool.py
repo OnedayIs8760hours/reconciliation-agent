@@ -53,3 +53,25 @@ def test_unique_product_values_keeps_first_order() -> None:
     result = excel_tool.unique_product_values(values)
 
     assert result == ["商品A", "商品B", "商品C"]
+
+
+def test_get_unique_column_values_only_deduplicates(tmp_path: Path) -> None:
+    """读取唯一列值时只去重，不做清洗、去空或全角转换。"""
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet["A1"] = "产品名称"
+    worksheet["A2"] = " 商品A "
+    worksheet["A3"] = ""
+    worksheet["A4"] = None
+    worksheet["A5"] = "商品A"
+    worksheet["A6"] = " 商品A "
+    worksheet["A7"] = "商品Ｃ"
+    worksheet["A8"] = "商品C"
+
+    file_path = tmp_path / "unique.xlsx"
+    workbook.save(file_path)
+
+    result = excel_tool.get_unique_column_values(file_path, "产品名称")
+
+    assert result == [" 商品A ", None, "商品A", "商品Ｃ", "商品C"]

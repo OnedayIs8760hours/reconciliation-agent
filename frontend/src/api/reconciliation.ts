@@ -98,6 +98,7 @@ export interface UploadReconciliationResponse {
   a_preview: ExcelSheetPreview
   llm_result: ExcelLlmAnalysisResult
   product_mapping: ProductMappingResponse
+  c_file_path: string
 }
 
 export const initialTask: ReconciliationTask = {

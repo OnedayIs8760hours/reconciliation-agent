@@ -2,13 +2,14 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from config import Config
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
 from agent.llm import ReconciliationLLMAgent
 from agent.llm_providers import LLMProviderError
+from agent.workflows.reconciliation.copy_a_to_c import copy_a_to_c_from_metadata
 from backend.services.product_mapping_service import ProductMappingService
 from tools import ExcelSheetPreview, excel_tool
-from config import Config
 
 router = APIRouter(
     prefix="/api/reconciliation",
@@ -48,7 +49,7 @@ def _new_task_id() -> str:
     # datetime.now()：获取当前本地时间
     # strftime(...)：把时间格式化成字符串
     # %Y%m%d%H%M%S%f 分别表示：年月日时分秒微秒，用微秒降低 task_id 重复概率
-    return f"REC{datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+    return f"REC{datetime.now().strftime('%Y%m%d%H%M%S%f')}"  # noqa: DTZ005
 
 
 async def _save_upload(file: UploadFile, target: Path) -> None:
@@ -173,8 +174,8 @@ def _build_product_mapping(a_file_path: Path, b_file_path: Path) -> dict[str, ob
 async def upload_excel(
     # File(...)：告诉 FastAPI 这个参数来自 multipart/form-data 文件上传
     # ... 表示必填；前端必须同时传 a_file 和 b_file
-    a_file: UploadFile = File(...),
-    b_file: UploadFile = File(...),
+    a_file: UploadFile = File(...),  # noqa: B008
+    b_file: UploadFile = File(...),  # noqa: B008
 ):
     # 校验 A 表和 B 表是否都是 .xlsx 文件
     _validate_xlsx(a_file, "A表")
@@ -201,7 +202,7 @@ async def upload_excel(
 
     # isoformat(...)：把时间转成 ISO 格式字符串，方便 JSON 保存和前端展示
     # timespec="seconds"：精确到秒，不保留微秒
-    created_at = datetime.now().isoformat(timespec="seconds")
+    created_at = datetime.now().isoformat(timespec="seconds")  # noqa: DTZ005
 
     # metadata 用来临时记录任务信息；后续接 SQLite 后可以迁移到数据库表
     metadata = {
@@ -222,15 +223,24 @@ async def upload_excel(
     product_mapping = _build_product_mapping(a_file_path, b_file_path)
     metadata["product_mapping"] = product_mapping
 
+    metadata_path = task_dir / "metadata.json"
+
     # json.dumps(...)：把 Python 字典转换成 JSON 字符串
     # ensure_ascii=False：保留中文，不转成 \uXXXX
     # indent=2：格式化缩进，便于人工查看
     # write_text(...)：以文本方式写入 metadata.json
     # encoding="utf-8"：使用 UTF-8 编码，避免中文乱码
-    (task_dir / "metadata.json").write_text(
+    metadata_path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    try:
+        c_file_path = copy_a_to_c_from_metadata(metadata_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"C表底稿生成失败：{exc}") from exc
+
+    metadata["c_file_path"] = str(c_file_path)
 
     # 返回给前端：前端后续用 task_id 查询状态、开始对账、下载结果
     return {
@@ -239,4 +249,5 @@ async def upload_excel(
         "a_preview": metadata["a_preview"],
         "llm_result": llm_result,
         "product_mapping": product_mapping,
+        "c_file_path": str(c_file_path),
     }
