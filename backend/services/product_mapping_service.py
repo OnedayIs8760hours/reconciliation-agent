@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -66,11 +67,19 @@ class ProductMappingService:
             sheet_name=b_sheet_name,
             header_row=structure_result.b_sheet.header_row_guess,
         )
-
+        print("A 表唯一值:", a_unique)
+        print("B 表唯一值:", b_unique)
         # analyze_product_mapping(...)：把去重后的商品列表交给 LLM 做语义匹配。
         llm_response = self.llm_agent.analyze_product_mapping(a_unique, b_unique)
-        mapping_result = parse_product_mapping_result(llm_response.text)
-        a_b_intersection = build_a_b_intersection(a_unique, b_unique)
+        
+        print(llm_response)
+        mapping_result = parse_product_mapping_result(
+            llm_response.text,
+            a_unique=a_unique,
+            b_unique=b_unique,
+        )
+        # 以 A 表为基准生成一对一匹配结果：先完全匹配，再使用 LLM 确认的相似匹配。
+        a_b_intersection = build_a_b_intersection(a_unique, b_unique, mapping_result)
 
         return {
             "structure": structure_result.to_dict(),
@@ -156,12 +165,25 @@ def parse_field_guess(value: object) -> ProductFieldGuess:
     )
 
 
-def parse_product_mapping_result(text: str) -> ProductMappingResult:
+def parse_product_mapping_result(
+    text: str,
+    *,
+    a_unique: list[str] | None = None,
+    b_unique: list[str] | None = None,
+) -> ProductMappingResult:
     """把 LLM 返回的 JSON 文本解析成商品映射结果。"""
 
     payload = parse_json_object(text)
     if payload is None:
-        return ProductMappingResult(raw_text=text, parse_error="LLM 返回内容不是合法 JSON")
+        fallback_result = ProductMappingResult(raw_text=text, parse_error="LLM 返回内容不是合法 JSON")
+        if a_unique is None or b_unique is None:
+            return fallback_result
+        return build_rule_based_product_mapping_result(
+            a_unique,
+            b_unique,
+            raw_text=text,
+            parse_error=fallback_result.parse_error,
+        )
 
     normalization_rules = parse_normalization_rules(payload.get("normalization_rules"))
     mappings = parse_mapping_items(payload.get("mappings"))
@@ -179,14 +201,140 @@ def parse_product_mapping_result(text: str) -> ProductMappingResult:
     )
 
 
+def build_rule_based_product_mapping_result(
+    a_unique: list[str],
+    b_unique: list[str],
+    *,
+    raw_text: str = "",
+    parse_error: str = "",
+) -> ProductMappingResult:
+    """LLM 返回不可用时，用保守规则生成商品映射兜底结果。"""
+
+    mappings: list[ProductMappingItem] = []
+    need_review: list[ProductReviewItem] = []
+    used_b_values: set[str] = set()
+    b_values = set(b_unique)
+
+    for a_value in a_unique:
+        if a_value in b_values and a_value not in used_b_values:
+            mappings.append(
+                ProductMappingItem(
+                    standard=a_value,
+                    a_value=a_value,
+                    b_value=a_value,
+                    confidence=1.0,
+                    reason="名称完全一致",
+                )
+            )
+            used_b_values.add(a_value)
+
+    b_by_key: dict[str, list[str]] = {}
+    for b_value in b_unique:
+        if b_value in used_b_values:
+            continue
+        key = build_product_match_key(b_value)
+        b_by_key.setdefault(key, []).append(b_value)
+
+    matched_a_values = {item.a_value for item in mappings}
+    for a_value in a_unique:
+        if a_value in matched_a_values:
+            continue
+
+        key = build_product_match_key(a_value)
+        candidates = [b_value for b_value in b_by_key.get(key, []) if b_value not in used_b_values]
+        if len(candidates) == 1:
+            b_value = candidates[0]
+            mappings.append(
+                ProductMappingItem(
+                    standard=a_value,
+                    a_value=a_value,
+                    b_value=b_value,
+                    confidence=0.92,
+                    reason="忽略 B 表收纳箱前缀和分隔符差异后核心规格一致",
+                )
+            )
+            used_b_values.add(b_value)
+            matched_a_values.add(a_value)
+        elif len(candidates) > 1:
+            need_review.append(
+                ProductReviewItem(
+                    a_value=a_value,
+                    b_value=", ".join(candidates),
+                    confidence=0.5,
+                    reason="规则兜底发现多个候选 B 值，需人工确认",
+                )
+            )
+
+    unmatched_a = [a_value for a_value in a_unique if a_value not in matched_a_values]
+    unmatched_b = [b_value for b_value in b_unique if b_value not in used_b_values]
+
+    return ProductMappingResult(
+        normalization_rules={
+            "b_prefix_to_ignore": ["收纳箱"],
+            "ignorable_separators": ["-", "空格"],
+        },
+        mappings=mappings,
+        unmatched_a=unmatched_a,
+        unmatched_b=unmatched_b,
+        need_review=need_review,
+        raw_text=raw_text,
+        parse_error=parse_error,
+    )
+
+
+def build_product_match_key(value: str) -> str:
+    """生成保守匹配 key，只消除已知无业务差异的前缀和分隔符。"""
+
+    text = unicodedata.normalize("NFKC", value).strip()
+    text = text.replace(" ", "")
+    text = text.replace("-收纳箱-", "-")
+    text = text.removeprefix("收纳箱-")
+    text = text.removesuffix("-收纳箱")
+    text = text.replace("-", "")
+    return text
+
+
 def build_a_b_intersection(
     a_unique: list[str],
     b_unique: list[str],
-) -> list[str]:
-    """返回 A/B 去重商品交集，并保留 A 表的原始顺序。"""
+    mapping_result: ProductMappingResult | None = None,
+) -> dict[str, list[object]]:
+    """以 A 表为基准返回 A/B 一对一匹配、A 未匹配和 B 未使用结果。"""
 
+    matched: list[dict[str, str]] = []
+    a_unmatched: list[str] = []
+    used_b_values: set[str] = set()
     b_values = set(b_unique)
-    return [a_value for a_value in a_unique if a_value in b_values]
+
+    mapping_by_a: dict[str, str] = {}
+    if mapping_result is not None:
+        for item in mapping_result.mappings:
+            if item.a_value in mapping_by_a:
+                continue
+            if item.b_value in b_values:
+                mapping_by_a[item.a_value] = item.b_value
+
+    for a_value in a_unique:
+        if a_value in b_values and a_value not in used_b_values:
+            matched.append({"a": a_value, "b": a_value})
+            used_b_values.add(a_value)
+            continue
+
+        b_value = mapping_by_a.get(a_value)
+        if b_value and b_value not in used_b_values:
+            matched.append({"a": a_value, "b": b_value})
+            used_b_values.add(b_value)
+            continue
+
+        a_unmatched.append(a_value)
+
+    b_unused = [b_value for b_value in b_unique if b_value not in used_b_values]
+
+    return {
+        "matched": matched,
+        "a_unmatched": a_unmatched,
+        "b_unused": b_unused,
+    }
 
 
 def parse_json_object(text: str) -> dict[str, Any] | None:

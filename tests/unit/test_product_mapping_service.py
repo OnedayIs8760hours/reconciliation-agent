@@ -110,7 +110,11 @@ def test_product_mapping_service_uses_llm_guessed_fields(tmp_path: Path) -> None
     assert result["b_column_name"] == "规格"
     assert result["a_unique"] == ["商品A", "商品B"]
     assert result["b_unique"] == ["商品A", "商品C"]
-    assert result["a_b_intersection"] == ["商品A"]
+    assert result["a_b_intersection"] == {
+        "matched": [{"a": "商品A", "b": "商品A"}],
+        "a_unmatched": ["商品B"],
+        "b_unused": ["商品C"],
+    }
     assert result["summary"]["mapping_count"] == 1  # type: ignore[index]
 
 
@@ -169,4 +173,64 @@ def test_product_mapping_service_matches_identical_values_without_llm_mapping(tm
 
     result = service.build_product_mapping(a_file_path, b_file_path)
 
-    assert result["a_b_intersection"] == ["商品A"]
+    assert result["a_b_intersection"] == {
+        "matched": [{"a": "商品A", "b": "商品A"}],
+        "a_unmatched": ["商品B"],
+        "b_unused": ["商品C"],
+    }
+
+
+def test_product_mapping_service_falls_back_when_llm_returns_empty_text(tmp_path: Path) -> None:
+    """商品映射 LLM 空返回时，服务应使用保守规则完成可确定的匹配。"""
+
+    class EmptyTextMappingAgent(FakeProductMappingAgent):
+        def analyze_sheet_structure(self, a_preview: object, b_preview: object) -> LLMResponse:
+            text = """
+            {
+              "a_sheet": {"header_row_guess": 1, "field_name": "产品名称", "confidence": 0.95, "reason": "可识别"},
+              "b_sheet": {"header_row_guess": 1, "field_name": "规格", "confidence": 0.95, "reason": "可识别"}
+            }
+            """
+            return LLMResponse(text=text, model="fake-model", provider="deepseek")
+
+        def analyze_product_mapping(self, a_products: list[str], b_products: list[str]) -> LLMResponse:
+            return LLMResponse(text="", model="fake-model", provider="deepseek")
+
+    a_file_path = tmp_path / "a.xlsx"
+    b_file_path = tmp_path / "b.xlsx"
+
+    a_workbook = Workbook()
+    a_sheet = a_workbook.active
+    a_sheet.title = "A表"
+    a_sheet["A1"] = "产品名称"
+    a_sheet["A2"] = "XN6012-奶油色-带字款"
+    a_sheet["A3"] = "WK9648-红箱-毛衣狗-M-鹿角"
+    a_sheet["A4"] = "WK9648-收纳箱-红箱-小熊-M圆角"
+    a_workbook.save(a_file_path)
+
+    b_workbook = Workbook()
+    b_sheet = b_workbook.active
+    b_sheet.title = "B表"
+    b_sheet["A1"] = "规格"
+    b_sheet["A2"] = "XN6012-奶油色-带字款"
+    b_sheet["A3"] = "WK9648-收纳箱-红箱-毛衣狗-M-鹿角"
+    b_sheet["A4"] = "WK9648-收纳箱-红箱-毛衣狗-M-圆角"
+    b_workbook.save(b_file_path)
+
+    service = ProductMappingService(llm_agent=EmptyTextMappingAgent())  # type: ignore[arg-type]
+
+    result = service.build_product_mapping(a_file_path, b_file_path)
+
+    assert result["a_b_intersection"] == {
+        "matched": [
+            {"a": "XN6012-奶油色-带字款", "b": "XN6012-奶油色-带字款"},
+            {
+                "a": "WK9648-红箱-毛衣狗-M-鹿角",
+                "b": "WK9648-收纳箱-红箱-毛衣狗-M-鹿角",
+            },
+        ],
+        "a_unmatched": ["WK9648-收纳箱-红箱-小熊-M圆角"],
+        "b_unused": ["WK9648-收纳箱-红箱-毛衣狗-M-圆角"],
+    }
+    assert result["summary"]["mapping_count"] == 2  # type: ignore[index]
+    assert result["result"]["parse_error"] == "LLM 返回内容不是合法 JSON"  # type: ignore[index]

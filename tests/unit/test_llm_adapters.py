@@ -136,6 +136,25 @@ def test_openai_compatible_adapter_preserves_provider_name() -> None:
     assert response.provider == "qwen"
 
 
+def test_deepseek_adapter_disables_thinking_for_json_prompts() -> None:
+    client = FakeOpenAIClient()
+    response = OpenAICompatibleAdapter(
+        provider="deepseek",
+        model="deepseek-v4-flash",
+        api_key_env="DEEPSEEK_API_KEY",
+        base_url="https://api.deepseek.com",
+        client=client,
+    ).complete("请只输出 JSON：{}", max_tokens=128)
+
+    kwargs = client.chat.completions.kwargs
+    assert response.text == "OpenAI 响应"
+    assert kwargs["response_format"] == {"type": "json_object"}
+    assert kwargs["extra_body"] == {
+        "reasoning_effort": "none",
+        "thinking": {"type": "disabled"},
+    }
+
+
 def test_ollama_adapter_posts_to_chat_endpoint_and_maps_max_tokens() -> None:
     client = FakeHTTPClient()
     response = OllamaAdapter(model="qwen2.5", base_url="http://localhost:11434/", client=client).complete(

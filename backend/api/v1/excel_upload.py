@@ -130,8 +130,8 @@ def _analyze_a_sheet_with_llm(a_file_path: Path) -> tuple[ExcelSheetPreview, dic
 
     try:
         # llm_response = ReconciliationLLMAgent(provider="deepseek").analyze_excel_preview(preview)
-        llm_response = ReconciliationLLMAgent(provider="deepseek",model="deepseek-v4-flash", base_url="https://api.deepseek.com", api_key_env="DEEPSEEK_API_KEY",).analyze_excel_preview(preview)
-        # llm_response = ReconciliationLLMAgent(provider="ollama").analyze_excel_preview(preview)
+        # llm_response = ReconciliationLLMAgent(provider="deepseek",model="deepseek-v4-flash", base_url="https://api.deepseek.com", api_key_env="DEEPSEEK_API_KEY",).analyze_excel_preview(preview)
+        llm_response = ReconciliationLLMAgent(provider="ollama").analyze_excel_preview(preview)
     except LLMProviderError as exc:
         raise HTTPException(status_code=500, detail=f"LLM 分析失败：{exc}") from exc
     except Exception as exc:

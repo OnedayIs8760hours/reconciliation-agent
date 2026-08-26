@@ -16,7 +16,7 @@ class OllamaAdapter:
         self,
         model: str,
         base_url: str = "http://localhost:11434",
-        timeout_seconds: float = 60.0,
+        timeout_seconds: float = 180.0,
         client: Any | None = None,
     ) -> None:
         self.model = model
