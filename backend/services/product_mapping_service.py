@@ -185,6 +185,7 @@ class ProductMappingService:
 
         try:
             llm_response = self.llm_agent.analyze_sheet_structure(a_preview, b_preview)  # type: ignore[arg-type]
+            print(llm_response)
         except Exception as exc:
             return ProductStructureResult(parse_error=str(exc))
 

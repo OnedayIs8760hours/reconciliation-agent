@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from openpyxl import Workbook
 from pydantic import ValidationError
 
 from agent import ClaudeReconciliationAgent, LLMConfig, ReconciliationLLMAgent
@@ -15,6 +16,7 @@ from agent.llm_providers import (
     build_llm_adapter,
     resolve_llm_config,
 )
+from tools import excel_tool
 
 
 class FakeAnthropicMessages:
@@ -185,6 +187,50 @@ def test_product_mapping_uses_large_default_output_budget() -> None:
     llm_agent.analyze_product_mapping(["商品A"], ["商品A"])
 
     assert adapter.max_tokens == 40960
+
+
+def test_sheet_structure_scores_a_columns_against_b_spec(tmp_path) -> None:
+    """B 表规格列存在时，应按 B 规格值反推 A 表最相似字段。"""
+
+    a_file_path = tmp_path / "a.xlsx"
+    b_file_path = tmp_path / "b.xlsx"
+
+    a_workbook = Workbook()
+    a_sheet = a_workbook.active
+    a_sheet["A1"] = "货品名称"
+    a_sheet["B1"] = "规格"
+    a_sheet["A2"] = "收纳篮"
+    a_sheet["B2"] = "ZXI001-收纳篮-绿色-2XL"
+    a_sheet["A3"] = "收纳篮"
+    a_sheet["B3"] = "ZXI001-收纳篮-黄色-2XL"
+    a_sheet["A4"] = "收纳篮"
+    a_sheet["B4"] = "ZXI001-收纳篮-奶色-M"
+    a_workbook.save(a_file_path)
+
+    b_workbook = Workbook()
+    b_sheet = b_workbook.active
+    b_sheet["A1"] = "规格"
+    b_sheet["A2"] = "ZXI001-收纳篮-绿色-2XL"
+    b_sheet["A3"] = "ZXI001-收纳篮-黄色-2XL"
+    b_sheet["A4"] = "ZXI001-收纳篮-奶色-M"
+    b_workbook.save(b_file_path)
+
+    a_preview = excel_tool.read_sheet_preview(a_file_path, rows=4)
+    b_preview = excel_tool.read_sheet_preview(b_file_path, rows=4)
+    llm_agent = ReconciliationLLMAgent(provider="openai", adapter=FakeAdapter())
+
+    scores = llm_agent.build_b_spec_match_scores(a_preview, b_preview)
+    candidates = scores["a_candidates"]
+
+    assert scores["b_spec_found"] is True
+    assert scores["b_spec_column"]["header"] == "规格"  # type: ignore[index]
+    assert candidates[0]["header"] == "规格"  # type: ignore[index]
+    assert candidates[0]["match_score"] > candidates[1]["match_score"]  # type: ignore[index]
+
+    prompt = llm_agent.build_sheet_structure_prompt(a_preview, b_preview)
+
+    assert "b_spec_match_scores" in prompt
+    assert "得分最高且样例合理的字段优先判定为 A 表商品字段" in prompt
 
 
 def test_claude_compat_agent_defaults_to_anthropic_with_injected_adapter() -> None:
