@@ -6,7 +6,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from agent.llm_providers.base import LLMResponse
-from backend.services.product_mapping_service import ProductMappingService
+from backend.services.product_mapping_service import ProductMappingService, build_a_b_intersection
 
 
 class FakeProductMappingAgent:
@@ -287,8 +287,67 @@ def test_product_mapping_service_batches_a_products_by_twenty() -> None:
     mapping_result, _, _ = service.analyze_product_mapping_in_batches(a_unique, b_unique)
 
     assert [len(batch) for batch in agent.a_batches] == [20, 20, 5]
-    assert [len(batch) for batch in agent.b_batches] == [45, 25, 5]
+    assert [len(batch) for batch in agent.b_batches] == [45, 45, 45]
     assert mapping_result.mapping_count == 45
     assert mapping_result.unmatched_a == []
     assert mapping_result.unmatched_b == []
     assert "reason" not in mapping_result.mappings[0].to_dict()
+
+
+def test_product_mapping_service_allows_reusing_same_b_value() -> None:
+    """多个 A 商品可以映射到同一个 B 商品。"""
+
+    class DuplicateBMappingAgent:
+        provider = "deepseek"
+        model = "fake-model"
+
+        def __init__(self) -> None:
+            self.b_products: list[str] = []
+
+        def analyze_product_mapping(self, a_products: list[str], b_products: list[str]) -> LLMResponse:
+            self.b_products = list(b_products)
+            mappings = [
+                {
+                    "a_value": a_value,
+                    "b_value": "标准规格",
+                    "confidence": 0.95,
+                }
+                for a_value in a_products
+            ]
+            text = (
+                "{"
+                "\"mappings\": "
+                f"{json.dumps(mappings, ensure_ascii=False)}, "
+                "\"need_review\": []"
+                "}"
+            )
+            return LLMResponse(text=text, model=self.model, provider=self.provider)
+
+    agent = DuplicateBMappingAgent()
+    service = ProductMappingService(llm_agent=agent)  # type: ignore[arg-type]
+
+    mapping_result, _, _ = service.analyze_product_mapping_in_batches(
+        ["A规格1", "A规格2"],
+        ["标准规格", "未使用规格"],
+    )
+    intersection = build_a_b_intersection(
+        ["A规格1", "A规格2"],
+        ["标准规格", "未使用规格"],
+        mapping_result,
+    )
+
+    assert agent.b_products == ["标准规格", "未使用规格"]
+    assert [(item.a_value, item.b_value) for item in mapping_result.mappings] == [
+        ("A规格1", "标准规格"),
+        ("A规格2", "标准规格"),
+    ]
+    assert mapping_result.unmatched_a == []
+    assert mapping_result.unmatched_b == ["未使用规格"]
+    assert intersection == {
+        "matched": [
+            {"a": "A规格1", "b": "标准规格"},
+            {"a": "A规格2", "b": "标准规格"},
+        ],
+        "a_unmatched": [],
+        "b_unused": ["未使用规格"],
+    }

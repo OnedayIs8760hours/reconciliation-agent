@@ -118,7 +118,7 @@ class ProductMappingService:
         llm_provider = safe_string(getattr(self.llm_agent, "provider", ""))
 
         for batch_index, a_batch in enumerate(chunk_list(a_unique, batch_size), start=1):
-            b_candidates = [b_value for b_value in b_unique if b_value not in used_b_values]
+            b_candidates = list(b_unique)
             llm_response = self.llm_agent.analyze_product_mapping(a_batch, b_candidates)
             llm_model = llm_response.model
             llm_provider = llm_response.provider
@@ -142,7 +142,7 @@ class ProductMappingService:
                     continue
                 if item.b_value not in b_candidate_values:
                     continue
-                if item.a_value in used_a_values or item.b_value in used_b_values:
+                if item.a_value in used_a_values:
                     continue
                 all_mappings.append(item)
                 used_a_values.add(item.a_value)
@@ -272,7 +272,7 @@ def build_a_b_intersection(
     b_unique: list[str],
     mapping_result: ProductMappingResult | None = None,
 ) -> dict[str, list[object]]:
-    """从 LLM 返回的 mappings 中提取 A/B 一对一匹配、A 未匹配和 B 未使用结果。"""
+    """从 LLM 返回的 mappings 中提取匹配、A 未匹配和 B 未使用结果。"""
 
     matched: list[dict[str, str]] = []
     used_b_values: set[str] = set()
@@ -286,7 +286,7 @@ def build_a_b_intersection(
                 continue
             if item.b_value not in b_values:
                 continue
-            if item.a_value in matched_a_values or item.b_value in used_b_values:
+            if item.a_value in matched_a_values:
                 continue
             matched.append({"a": item.a_value, "b": item.b_value})
             matched_a_values.add(item.a_value)
