@@ -67,12 +67,9 @@ class ProductMappingService:
             sheet_name=b_sheet_name,
             header_row=structure_result.b_sheet.header_row_guess,
         )
-        print("A 表唯一值:", a_unique)
-        print("B 表唯一值:", b_unique)
         # analyze_product_mapping(...)：把去重后的商品列表交给 LLM 做语义匹配。
         llm_response = self.llm_agent.analyze_product_mapping(a_unique, b_unique)
         
-        print(llm_response)
         mapping_result = parse_product_mapping_result(
             llm_response.text,
             a_unique=a_unique,
