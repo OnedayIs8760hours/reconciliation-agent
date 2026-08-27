@@ -6,12 +6,12 @@
 
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 from typing import Any
-import unicodedata
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -286,8 +286,8 @@ class ExcelTool:
         sheet_name: str | None = None,
         header_row: int = 1,
         data_only: bool = True,
-    ) -> list[str]:
-        """读取指定商品列，并完成基础清洗和去重。"""
+    ) -> list[ExcelValue]:
+        """读取指定列，并只按原始单元格值去重。"""
 
         values = self.get_column_values(
             file_path,
@@ -296,7 +296,14 @@ class ExcelTool:
             header_row=header_row,
             data_only=data_only,
         )
-        return self.unique_product_values(values)
+        result: list[ExcelValue] = []
+        seen: set[ExcelValue] = set()
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            result.append(value)
+        return result
 
     def find_header_index(self, headers: Sequence[str], column_name: str) -> int:
         """在表头列表中查找指定字段的位置。"""
@@ -477,7 +484,7 @@ class ExcelTool:
         headers: list[str] = []
         seen: set[str] = set()
         for record in records:
-            for key in record.keys():
+            for key in record:
                 if key not in seen:
                     seen.add(key)
                     headers.append(key)

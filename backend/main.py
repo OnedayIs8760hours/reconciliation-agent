@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,9 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
 from backend.api.router import router
-
 
 # 创建 FastAPI 应用实例。
 app = FastAPI()
@@ -26,6 +24,11 @@ app.add_middleware(
 
 # 注册 API 路由。
 app.include_router(router)
+
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 
 # 本地直接运行入口：启动 Uvicorn 开发服务器。

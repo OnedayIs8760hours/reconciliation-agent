@@ -1,20 +1,27 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import Any
 
 from agent.llm import ReconciliationLLMAgent
-from backend.domain.product_mapping import (
-    ProductFieldGuess,
-    ProductMappingItem,
-    ProductMappingResult,
-    ProductReviewItem,
-    ProductStructureResult,
+from backend.domain.json_parser import parse_json_object
+from backend.domain.product_mapping import ProductStructureResult
+from backend.domain.product_mapping_parser import parse_field_guess, parse_product_mapping_result
+from backend.domain.product_mapping_projection import build_a_b_intersection
+from backend.services.product_mapping_batcher import (
+    PRODUCT_MAPPING_BATCH_SIZE,
+    ProductMappingBatchAnalyzer,
+    chunk_list,
 )
 from tools import excel_tool
 
-PRODUCT_MAPPING_BATCH_SIZE = 20
+__all__ = [
+    "PRODUCT_MAPPING_BATCH_SIZE",
+    "ProductMappingService",
+    "build_a_b_intersection",
+    "chunk_list",
+    "parse_json_object",
+    "parse_product_mapping_result",
+]
 
 
 class ProductMappingService:
@@ -23,10 +30,8 @@ class ProductMappingService:
     def __init__(self, llm_agent: ReconciliationLLMAgent | None = None) -> None:
         """初始化服务，允许测试时传入假的 LLM Agent。"""
 
-        if llm_agent is None:
-            # ReconciliationLLMAgent(...)：创建默认 LLM Agent，具体模型由配置决定。
-            llm_agent = ReconciliationLLMAgent(provider="deepseek")
-        self.llm_agent = llm_agent
+        self.llm_agent = llm_agent or ReconciliationLLMAgent(provider="deepseek")
+        self.batch_analyzer = ProductMappingBatchAnalyzer(self.llm_agent)
 
     def build_product_mapping(
         self,
@@ -40,7 +45,6 @@ class ProductMappingService:
         """先识别 A/B 表商品字段，再读取商品列并生成映射结果。"""
 
         preview_row_count = preview_rows or 20
-
         a_preview = excel_tool.read_sheet_preview(
             a_file_path,
             sheet_name=a_sheet_name,
@@ -55,25 +59,23 @@ class ProductMappingService:
         structure_result = self.guess_product_fields(a_preview, b_preview)
         self.validate_structure_result(structure_result)
 
-        # 脚本提取唯一值列
-        a_unique = excel_tool.get_unique_column_values(
+        a_unique = self.read_unique_product_values(
             a_file_path,
             structure_result.a_sheet.field_name,
             sheet_name=a_sheet_name,
             header_row=structure_result.a_sheet.header_row_guess,
         )
-        b_unique = excel_tool.get_unique_column_values(
+        b_unique = self.read_unique_product_values(
             b_file_path,
             structure_result.b_sheet.field_name,
             sheet_name=b_sheet_name,
             header_row=structure_result.b_sheet.header_row_guess,
         )
-        # 把 A 表商品按批交给 LLM 做语义匹配，避免一次输出过长导致 JSON 截断。
+
         mapping_result, llm_model, llm_provider = self.analyze_product_mapping_in_batches(
             a_unique,
             b_unique,
         )
-        # 从 LLM 返回的 mappings 字段生成 A/B 匹配结果。
         a_b_intersection = build_a_b_intersection(a_unique, b_unique, mapping_result)
 
         return {
@@ -102,76 +104,28 @@ class ProductMappingService:
         b_unique: list[str],
         *,
         batch_size: int = PRODUCT_MAPPING_BATCH_SIZE,
-    ) -> tuple[ProductMappingResult, str, str]:
-        """按 A 表商品分批调用 LLM，并把每批 mappings 合并成一个结果。"""
+    ):
+        """兼容旧调用路径，实际分批逻辑位于 ProductMappingBatchAnalyzer。"""
 
-        if batch_size < 1:
-            raise ValueError("batch_size 必须大于等于 1")
+        return self.batch_analyzer.analyze(a_unique, b_unique, batch_size=batch_size)
 
-        all_mappings: list[ProductMappingItem] = []
-        all_need_review: list[ProductReviewItem] = []
-        used_a_values: set[str] = set()
-        used_b_values: set[str] = set()
-        raw_batches: list[dict[str, object]] = []
-        parse_errors: list[str] = []
-        llm_model = safe_string(getattr(self.llm_agent, "model", ""))
-        llm_provider = safe_string(getattr(self.llm_agent, "provider", ""))
+    def read_unique_product_values(
+        self,
+        file_path: Path,
+        column_name: str,
+        *,
+        sheet_name: str | None = None,
+        header_row: int = 1,
+    ) -> list[str]:
+        """读取商品列，并应用商品匹配所需的文本清洗和去重规则。"""
 
-        for batch_index, a_batch in enumerate(chunk_list(a_unique, batch_size), start=1):
-            b_candidates = list(b_unique)
-            llm_response = self.llm_agent.analyze_product_mapping(a_batch, b_candidates)
-            llm_model = llm_response.model
-            llm_provider = llm_response.provider
-
-            batch_result = parse_product_mapping_result(llm_response.text)
-            raw_batch: dict[str, object] = {
-                "batch_index": batch_index,
-                "a_start": (batch_index - 1) * batch_size,
-                "a_count": len(a_batch),
-                "raw_text": llm_response.text,
-            }
-            if batch_result.parse_error:
-                raw_batch["parse_error"] = batch_result.parse_error
-                parse_errors.append(f"第 {batch_index} 批：{batch_result.parse_error}")
-            raw_batches.append(raw_batch)
-
-            a_batch_values = set(a_batch)
-            b_candidate_values = set(b_candidates)
-            for item in batch_result.mappings:
-                if item.a_value not in a_batch_values:
-                    continue
-                if item.b_value not in b_candidate_values:
-                    continue
-                if item.a_value in used_a_values:
-                    continue
-                all_mappings.append(item)
-                used_a_values.add(item.a_value)
-                used_b_values.add(item.b_value)
-
-            for item in batch_result.need_review:
-                if item.a_value and item.a_value not in a_batch_values:
-                    continue
-                if item.b_value and item.b_value not in b_candidate_values:
-                    continue
-                all_need_review.append(item)
-
-        unmatched_a = [a_value for a_value in a_unique if a_value not in used_a_values]
-        unmatched_b = [b_value for b_value in b_unique if b_value not in used_b_values]
-        raw_text = json.dumps({"batches": raw_batches}, ensure_ascii=False, indent=2)
-        parse_error = "；".join(parse_errors)
-
-        return (
-            ProductMappingResult(
-                mappings=all_mappings,
-                unmatched_a=unmatched_a,
-                unmatched_b=unmatched_b,
-                need_review=all_need_review,
-                raw_text=raw_text,
-                parse_error=parse_error,
-            ),
-            llm_model,
-            llm_provider,
+        values = excel_tool.get_column_values(
+            file_path,
+            column_name,
+            sheet_name=sheet_name,
+            header_row=header_row,
         )
+        return excel_tool.unique_product_values(values)
 
     def guess_product_fields(
         self,
@@ -180,27 +134,20 @@ class ProductMappingService:
     ) -> ProductStructureResult:
         """让 LLM 根据表结构识别 A/B 商品字段。"""
 
-        if not isinstance(a_preview, object) or not isinstance(b_preview, object):
-            return ProductStructureResult(parse_error="预览数据无效")
-
         try:
             llm_response = self.llm_agent.analyze_sheet_structure(a_preview, b_preview)  # type: ignore[arg-type]
-            print(llm_response)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return ProductStructureResult(parse_error=str(exc))
 
-        
-        
-        # 把LLM 的回答解析成 JSON 对象，方便后续提取字段信息。
         payload = parse_json_object(llm_response.text)
         if payload is None:
             return ProductStructureResult(raw_text=llm_response.text, parse_error="LLM 返回内容不是合法 JSON")
 
-        # 从 JSON 对象中提取 A 表的字段识别结果。
-        a_sheet = parse_field_guess(payload.get("a_sheet"))
-        # 从 JSON 对象中提取 B 表的字段识别结果。
-        b_sheet = parse_field_guess(payload.get("b_sheet"))
-        return ProductStructureResult(a_sheet=a_sheet, b_sheet=b_sheet, raw_text=llm_response.text)
+        return ProductStructureResult(
+            a_sheet=parse_field_guess(payload.get("a_sheet")),
+            b_sheet=parse_field_guess(payload.get("b_sheet")),
+            raw_text=llm_response.text,
+        )
 
     def validate_structure_result(self, structure_result: ProductStructureResult) -> None:
         """检查 LLM 是否成功识别出 A/B 表商品字段。"""
@@ -213,243 +160,6 @@ class ProductMappingService:
 
         if not structure_result.b_sheet.field_name:
             raise ValueError("LLM 没有识别出 B 表商品字段，请检查 B 表表头是否清晰")
-
-
-
-def parse_field_guess(value: object) -> ProductFieldGuess:
-    """解析 LLM 返回的单个表商品字段识别结果。"""
-
-    if not isinstance(value, dict):
-        return ProductFieldGuess()
-
-    field_name = safe_string(value.get("field_name"))
-    header_row_guess = safe_int(value.get("header_row_guess"), default=1)
-    confidence = safe_float(value.get("confidence"))
-    reason = safe_string(value.get("reason"))
-
-    if header_row_guess < 1:
-        header_row_guess = 1
-
-    return ProductFieldGuess(
-        field_name=field_name,
-        header_row_guess=header_row_guess,
-        confidence=confidence,
-        reason=reason,
-    )
-
-
-def chunk_list(values: list[str], size: int) -> list[list[str]]:
-    """按固定大小切分列表。"""
-
-    return [values[index : index + size] for index in range(0, len(values), size)]
-
-
-def parse_product_mapping_result(text: str) -> ProductMappingResult:
-    """把 LLM 返回的 JSON 文本解析成商品映射结果。"""
-
-    payload = parse_json_object(text)
-    if payload is None:
-        return ProductMappingResult(raw_text=text, parse_error="LLM 返回内容不是合法 JSON")
-
-    normalization_rules = parse_normalization_rules(payload.get("normalization_rules"))
-    mappings = parse_mapping_items(payload.get("mappings"))
-    unmatched_a = parse_string_list(payload.get("unmatched_a"))
-    unmatched_b = parse_string_list(payload.get("unmatched_b"))
-    need_review = parse_review_items(payload.get("need_review"))
-
-    return ProductMappingResult(
-        normalization_rules=normalization_rules,
-        mappings=mappings,
-        unmatched_a=unmatched_a,
-        unmatched_b=unmatched_b,
-        need_review=need_review,
-        raw_text=text,
-    )
-
-
-def build_a_b_intersection(
-    a_unique: list[str],
-    b_unique: list[str],
-    mapping_result: ProductMappingResult | None = None,
-) -> dict[str, list[object]]:
-    """从 LLM 返回的 mappings 中提取匹配、A 未匹配和 B 未使用结果。"""
-
-    matched: list[dict[str, str]] = []
-    used_b_values: set[str] = set()
-    matched_a_values: set[str] = set()
-    a_values = set(a_unique)
-    b_values = set(b_unique)
-
-    if mapping_result is not None:
-        for item in mapping_result.mappings:
-            if item.a_value not in a_values:
-                continue
-            if item.b_value not in b_values:
-                continue
-            if item.a_value in matched_a_values:
-                continue
-            matched.append({"a": item.a_value, "b": item.b_value})
-            matched_a_values.add(item.a_value)
-            used_b_values.add(item.b_value)
-
-    a_unmatched = [a_value for a_value in a_unique if a_value not in matched_a_values]
-    b_unused = [b_value for b_value in b_unique if b_value not in used_b_values]
-
-    return {
-        "matched": matched,
-        "a_unmatched": a_unmatched,
-        "b_unused": b_unused,
-    }
-
-
-def parse_json_object(text: str) -> dict[str, Any] | None:
-    """从文本中解析 JSON 对象，兼容 LLM 偶尔返回 Markdown 代码块。"""
-
-    # strip(...)：去掉首尾空白，方便判断开头和结尾。
-    stripped = text.strip()
-    if not stripped:
-        return None
-
-    if stripped.startswith("```"):
-        # splitlines(...)：按行拆分，方便去掉 Markdown 代码块的第一行和最后一行。
-        lines = stripped.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        # join(...)：把剩余行重新拼回 JSON 文本。
-        stripped = "\n".join(lines).strip()
-
-    try:
-        # json.loads(...)：把 JSON 字符串解析成 Python 对象。
-        payload = json.loads(stripped)
-    except json.JSONDecodeError:
-        return None
-
-    if isinstance(payload, dict):
-        return payload
-    return None
-
-
-def parse_normalization_rules(value: object) -> dict[str, list[str]]:
-    """解析 LLM 返回的规则字段，只保留字符串列表。"""
-
-    result: dict[str, list[str]] = {}
-    if not isinstance(value, dict):
-        return result
-
-    for key, item in value.items():
-        if not isinstance(key, str):
-            continue
-        result[key] = parse_string_list(item)
-
-    return result
-
-
-def parse_mapping_items(value: object) -> list[ProductMappingItem]:
-    """解析已确认的商品映射列表。"""
-
-    result: list[ProductMappingItem] = []
-    if not isinstance(value, list):
-        return result
-
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        a_value = safe_string(item.get("a_value"))
-        b_value = safe_string(item.get("b_value"))
-        confidence = safe_float(item.get("confidence"))
-        standard = safe_string(item.get("standard")) or a_value
-
-        if not standard or not a_value or not b_value:
-            continue
-
-        mapping_item = ProductMappingItem(
-            standard=standard,
-            a_value=a_value,
-            b_value=b_value,
-            confidence=confidence,
-        )
-        result.append(mapping_item)
-
-    return result
-
-
-def parse_review_items(value: object) -> list[ProductReviewItem]:
-    """解析需要人工复核的商品匹配列表。"""
-
-    result: list[ProductReviewItem] = []
-    if not isinstance(value, list):
-        return result
-
-    for item in value:
-        if not isinstance(item, dict):
-            continue
-
-        a_value = safe_string(item.get("a_value"))
-        b_value = safe_string(item.get("b_value"))
-        confidence = safe_float(item.get("confidence"))
-
-        if not a_value and not b_value:
-            continue
-
-        review_item = ProductReviewItem(
-            a_value=a_value,
-            b_value=b_value,
-            confidence=confidence,
-        )
-        result.append(review_item)
-
-    return result
-
-
-def parse_string_list(value: object) -> list[str]:
-    """把 LLM 返回的列表安全转换成字符串列表。"""
-
-    result: list[str] = []
-    if not isinstance(value, list):
-        return result
-
-    for item in value:
-        text = safe_string(item)
-        if text:
-            result.append(text)
-
-    return result
-
-
-def safe_string(value: object) -> str:
-    """把任意值安全转换成去掉首尾空格的字符串。"""
-
-    if value is None:
-        return ""
-    # str(...)：把数字等内容转为文本；strip(...)：去掉首尾空白。
-    return str(value).strip()
-
-
-def safe_int(value: object, default: int = 0) -> int:
-    """把任意值安全转换成整数，失败时返回默认值。"""
-
-    if value is None:
-        return default
-    try:
-        # int(...)：把数字字符串或数字转换为整数。
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def safe_float(value: object) -> float:
-    """把置信度安全转换成浮点数，失败时返回 0。"""
-
-    if value is None:
-        return 0.0
-    try:
-        # float(...)：把数字字符串或数字转换为小数。
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
 
 
 product_mapping_service = ProductMappingService()
