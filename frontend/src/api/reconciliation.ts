@@ -1,6 +1,6 @@
 import type { ReconciliationTask } from '@/types/reconciliation'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
 export interface ExcelPreviewCell {
   coordinate: string
@@ -92,13 +92,23 @@ export interface ProductMappingResponse {
   summary: ProductMappingSummary
 }
 
+export interface MatchSummary {
+  source_rows: number
+  matched_source_rows: number
+  expanded_b_rows: number
+  unmatched_source_rows: number
+  review_source_rows: number
+  appended_b_rows: number
+}
+
 export interface UploadReconciliationResponse {
   task_id: string
-  status: 'UPLOADED'
+  status: 'UPLOADED' | 'SUCCESS'
   a_preview: ExcelSheetPreview
   llm_result: ExcelLlmAnalysisResult
   product_mapping: ProductMappingResponse
   c_file_path: string
+  match_summary?: Partial<MatchSummary>
 }
 
 export const initialTask: ReconciliationTask = {
@@ -313,4 +323,8 @@ export async function uploadReconciliationFiles(aFile: File, bFile: File): Promi
   }
 
   return data
+}
+
+export function getCTableDownloadUrl(taskId: string) {
+  return `${API_BASE_URL}/api/reconciliation/tasks/${encodeURIComponent(taskId)}/download/c-table`
 }

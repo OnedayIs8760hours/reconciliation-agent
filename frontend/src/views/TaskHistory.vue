@@ -72,7 +72,7 @@ const selectedTask = computed(() => taskHistory.find((task) => task.id === selec
         </div>
         <button class="ghost-button" type="button" :disabled="!selectedTask.exceptions.length" @click="drawerOpen = true">查看异常明细</button>
       </section>
-      <ResultDownload :files="selectedTask.downloads" :status="selectedTask.status" />
+      <ResultDownload :files="selectedTask.downloads" :status="selectedTask.status" :task-id="selectedTask.id" />
     </section>
 
     <ExceptionDrawer :open="drawerOpen" :records="selectedTask?.exceptions ?? []" @close="drawerOpen = false" />

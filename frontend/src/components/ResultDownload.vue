@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { FileDown, FileSpreadsheet, FileText } from '@lucide/vue'
+import { getCTableDownloadUrl } from '@/api/reconciliation'
 import type { DownloadFile, TaskStatus } from '@/types/reconciliation'
 
 defineProps<{
   files: DownloadFile[]
   status: TaskStatus
+  taskId: string
 }>()
 </script>
 
@@ -15,7 +17,14 @@ defineProps<{
       <article v-for="file in files" :key="file.id" class="download-item">
         <component :is="file.type === 'excel' ? FileSpreadsheet : FileText" :size="22" />
         <span>{{ file.name }}</span>
-        <button type="button" :disabled="!file.enabled">
+        <a
+          v-if="file.enabled && file.id === 'c-table'"
+          :href="getCTableDownloadUrl(taskId)"
+          class="download-button"
+        >
+          <FileDown :size="16" /> 下载
+        </a>
+        <button v-else type="button" :disabled="!file.enabled">
           <FileDown :size="16" /> 下载
         </button>
       </article>

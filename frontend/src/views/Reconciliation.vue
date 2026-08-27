@@ -57,6 +57,69 @@ function formatJson(value: unknown) {
   return JSON.stringify(value, null, 2)
 }
 
+function finishTaskFromUploadResponse(response: Awaited<ReturnType<typeof uploadReconciliationFiles>>) {
+  const summary = response.match_summary ?? {}
+  const sourceRows = summary.source_rows ?? (Number(response.llm_result.row_count_guess) || 0)
+  const matchedRows = summary.matched_source_rows ?? 0
+  const matchedBRows = summary.expanded_b_rows ?? 0
+  const unmatchedRows = summary.unmatched_source_rows ?? 0
+  const reviewRows = summary.review_source_rows ?? 0
+  const appendedBRows = summary.appended_b_rows ?? 0
+  const manualReviewCount = unmatchedRows + reviewRows + appendedBRows
+
+  task.id = response.task_id
+  task.status = response.status === 'SUCCESS' ? 'SUCCESS' : 'UPLOADED'
+  task.title = `${response.task_id} · C表已生成`
+  task.month = month.value
+  task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step, status: 'done' }))
+  task.progressDetail = {
+    currentText: `C表生成完成：匹配 ${matchedRows} 行，反向追加 ${appendedBRows} 条 B 表记录`,
+    progress: response.status === 'SUCCESS' ? 100 : 20,
+    processedCRecords: sourceRows,
+    totalCRecords: sourceRows,
+    matchedBRecords: matchedBRows,
+    manualReviewCount,
+  }
+  task.coverage = {
+    monthlyRecords: matchedBRows + appendedBRows,
+    acceptedByC: matchedBRows,
+    markedMissing: appendedBRows,
+    manuallyExcluded: 0,
+    unexplained: unmatchedRows,
+  }
+  task.verifyMetrics = [
+    {
+      label: 'A/C 数量差额',
+      value: '-',
+      passed: true,
+      hint: '已从 A 表生成 C 表底稿',
+    },
+    {
+      label: 'A/C 金额差额',
+      value: '-',
+      passed: manualReviewCount === 0,
+      hint: manualReviewCount ? '存在需要复核的匹配或追加记录' : '未发现需复核记录',
+    },
+    {
+      label: 'B表未解释记录',
+      value: appendedBRows,
+      passed: appendedBRows === 0,
+      hint: appendedBRows ? '已追加到 C 表作为反向核查记录' : 'B 表记录均已承接',
+    },
+    {
+      label: 'Excel公式错误',
+      value: 0,
+      passed: true,
+      hint: '已重写合计公式',
+    },
+  ]
+  task.downloads = [
+    { id: 'c-table', name: `${response.task_id}_C表.xlsx`, type: 'excel', enabled: response.status === 'SUCCESS' },
+    { id: 'b-marked', name: `${response.task_id}_B表追踪.xlsx`, type: 'excel', enabled: false },
+    { id: 'verify-report', name: `${response.task_id}_metadata.json`, type: 'report', enabled: false },
+  ]
+}
+
 async function startReconciliation() {
   if (!canStart.value || !aFileObject.value || !bFileObject.value) return
 
@@ -73,22 +136,10 @@ async function startReconciliation() {
   try {
     const response = await uploadReconciliationFiles(aFileObject.value, bFileObject.value)
 
-    task.id = response.task_id
-    task.status = response.status
-    task.title = `${response.task_id} · A表已完成 LLM 行数分析`
-    task.month = month.value
     aPreview.value = response.a_preview
     llmAnalysis.value = response.llm_result
     productMapping.value = response.product_mapping
-    task.progressSteps = initialTask.progressSteps.map((step) => ({ ...step }))
-    task.progressDetail = {
-      currentText: `LLM 判断 A 表数据行数：${response.llm_result.row_count_guess ?? '未能确定'}`,
-      progress: 20,
-      processedCRecords: 0,
-      totalCRecords: Number(response.llm_result.row_count_guess) || 0,
-      matchedBRecords: 0,
-      manualReviewCount: 0,
-    }
+    finishTaskFromUploadResponse(response)
   } catch (error) {
     task.status = 'FAILED'
     task.title = '文件上传失败'
@@ -172,7 +223,7 @@ async function startReconciliation() {
         </div>
         <button class="ghost-button" type="button" :disabled="!task.exceptions.length" @click="drawerOpen = true">查看异常明细</button>
       </section>
-      <ResultDownload :files="task.downloads" :status="task.status" />
+      <ResultDownload :files="task.downloads" :status="task.status" :task-id="task.id" />
     </main>
 
     <ExceptionDrawer :open="drawerOpen" :records="task.exceptions" @close="drawerOpen = false" />

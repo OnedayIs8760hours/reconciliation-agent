@@ -228,23 +228,45 @@ def normalize_date_column(
     workbook_epoch: datetime,
     start_row: int,
 ) -> None:
+    last_date_display: str | None = None
     for row_number in range(max(start_row, 1), worksheet.max_row + 1):
         cell = worksheet.cell(row=row_number, column=date_column_index)
-        if cell.value is None:
+        if cell.value in (None, ""):
+            if last_date_display is not None:
+                cell.value = last_date_display
+            continue
+        date_display = parse_date_display(cell.value, workbook_epoch)
+        if date_display is not None:
+            cell.value = date_display
+            last_date_display = date_display
             continue
         cell.value = format_date_display(cell.value, workbook_epoch)
+        last_date_display = None
 
 
 def format_date_display(value: object, workbook_epoch: datetime) -> object:
+    date_display = parse_date_display(value, workbook_epoch)
+    if date_display is not None:
+        return date_display
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def parse_date_display(value: object, workbook_epoch: datetime) -> str | None:
     if isinstance(value, datetime):
         return f"{value.month}月{value.day}日"
     if isinstance(value, date):
         return f"{value.month}月{value.day}日"
     if isinstance(value, int | float) and not isinstance(value, bool) and 1 <= value <= 60000:
+        month_day = parse_numeric_month_day(value)
+        if month_day is not None:
+            month, day = month_day
+            return f"{month}月{day}日"
         try:
             converted = from_excel(value, workbook_epoch)
         except (TypeError, ValueError):
-            return value
+            return None
         return f"{converted.month}月{converted.day}日"
     if isinstance(value, str):
         stripped = value.strip()
@@ -253,8 +275,31 @@ def format_date_display(value: object, workbook_epoch: datetime) -> object:
             if match:
                 month, day = match.groups()
                 return f"{int(month)}月{int(day)}日"
-        return stripped
-    return value
+    return None
+
+
+def parse_numeric_month_day(value: float) -> tuple[int, int] | None:
+    """Parse business dates written as numbers like 5.5 or 6.09."""
+
+    if isinstance(value, int):
+        return None
+    text = str(value).strip()
+    if "." not in text:
+        return None
+
+    month_text, day_text = text.split(".", 1)
+    if not month_text or not day_text:
+        return None
+
+    try:
+        month = int(month_text)
+        day = int(day_text)
+    except ValueError:
+        return None
+
+    if 1 <= month <= 12 and 1 <= day <= 31:
+        return month, day
+    return None
 
 
 def infer_date_column_from_preview(a_preview: dict[str, Any], *, header_row: int) -> str:

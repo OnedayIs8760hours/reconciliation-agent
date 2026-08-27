@@ -4,10 +4,12 @@ from pathlib import Path
 
 from config import Config
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 
 from agent.llm import ReconciliationLLMAgent
 from agent.llm_providers import LLMProviderError
 from agent.workflows.reconciliation.copy_a_to_c import copy_a_to_c_from_metadata
+from agent.workflows.reconciliation.match_c_to_b import match_c_to_b_from_metadata
 from backend.services.product_mapping_service import ProductMappingService
 from tools import ExcelSheetPreview, excel_tool
 
@@ -28,6 +30,7 @@ TASKS_DIR = BASE_DIR / "storage" / "tasks"
 
 # MVP 第一版只允许上传 .xlsx 文件
 ALLOWED_SUFFIX = ".xlsx"
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _validate_xlsx(file: UploadFile, label: str) -> None:
@@ -50,6 +53,13 @@ def _new_task_id() -> str:
     # strftime(...)：把时间格式化成字符串
     # %Y%m%d%H%M%S%f 分别表示：年月日时分秒微秒，用微秒降低 task_id 重复概率
     return f"REC{datetime.now().strftime('%Y%m%d%H%M%S%f')}"  # noqa: DTZ005
+
+
+def _resolve_task_dir(task_id: str) -> Path:
+    task_dir = (TASKS_DIR / task_id).resolve()
+    if not task_dir.is_relative_to(TASKS_DIR.resolve()) or not task_dir.is_dir():
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return task_dir
 
 
 async def _save_upload(file: UploadFile, target: Path) -> None:
@@ -170,6 +180,35 @@ def _build_product_mapping(a_file_path: Path, b_file_path: Path) -> dict[str, ob
         raise HTTPException(status_code=500, detail=f"商品映射生成失败：{exc}") from exc
 
 
+def _read_metadata(metadata_path: Path) -> dict[str, object]:
+    payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=500, detail="任务元数据格式无效")
+    return payload
+
+
+def _write_metadata(metadata_path: Path, metadata: dict[str, object]) -> None:
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _latest_match_summary(metadata: dict[str, object]) -> dict[str, int]:
+    steps = metadata.get("workflow_steps")
+    if not isinstance(steps, list):
+        return {}
+
+    for step in reversed(steps):
+        if not isinstance(step, dict) or step.get("step") != "02_match_c_to_b":
+            continue
+        summary = step.get("summary")
+        if not isinstance(summary, dict):
+            return {}
+        return {str(key): int(value) for key, value in summary.items() if isinstance(value, int)}
+    return {}
+
+
 @router.post("/upload")
 async def upload_excel(
     # File(...)：告诉 FastAPI 这个参数来自 multipart/form-data 文件上传
@@ -240,14 +279,37 @@ async def upload_excel(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"C表底稿生成失败：{exc}") from exc
 
-    metadata["c_file_path"] = str(c_file_path)
+    try:
+        match_c_to_b_from_metadata(metadata_path)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"C表匹配与反向核查失败：{exc}") from exc
 
-    # 返回给前端：前端后续用 task_id 查询状态、开始对账、下载结果
+    latest_metadata = _read_metadata(metadata_path)
+    latest_metadata["status"] = "SUCCESS"
+    _write_metadata(metadata_path, latest_metadata)
+    match_summary = _latest_match_summary(latest_metadata)
+
+    # 返回给前端：上传请求同步完成 C 表生成、A/B 匹配和 B 表反向核查。
     return {
         "task_id": task_id,
-        "status": "UPLOADED",
-        "a_preview": metadata["a_preview"],
+        "status": latest_metadata["status"],
+        "a_preview": latest_metadata["a_preview"],
         "llm_result": llm_result,
         "product_mapping": product_mapping,
         "c_file_path": str(c_file_path),
+        "match_summary": match_summary,
     }
+
+
+@router.get("/tasks/{task_id}/download/c-table")
+async def download_c_table(task_id: str):
+    task_dir = _resolve_task_dir(task_id)
+    c_file_path = task_dir / "C.xlsx"
+    if not c_file_path.exists():
+        raise HTTPException(status_code=404, detail="C表文件不存在")
+
+    return FileResponse(
+        c_file_path,
+        media_type=XLSX_MEDIA_TYPE,
+        filename=f"{task_id}_C表.xlsx",
+    )

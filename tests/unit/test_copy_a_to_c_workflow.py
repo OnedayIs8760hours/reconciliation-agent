@@ -7,7 +7,11 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill
 
-from agent.workflows.reconciliation.copy_a_to_c import copy_a_to_c_from_metadata
+from agent.workflows.reconciliation.copy_a_to_c import (
+    copy_a_to_c,
+    copy_a_to_c_from_metadata,
+    format_date_display,
+)
 
 
 def test_copy_a_to_c_from_metadata_creates_c_draft_and_updates_json(tmp_path: Path) -> None:
@@ -63,3 +67,29 @@ def test_copy_a_to_c_from_metadata_creates_c_draft_and_updates_json(tmp_path: Pa
     assert updated_metadata["c_file_path"] == str(c_path)
     assert updated_metadata["workflow_steps"][0]["step"] == "01_copy_a_to_c"
     assert updated_metadata["workflow_steps"][0]["date_column"] == "A"
+
+
+def test_format_date_display_handles_numeric_month_day() -> None:
+    assert format_date_display(5.5, date(1899, 12, 30)) == "5月5日"
+    assert format_date_display(6.09, date(1899, 12, 30)) == "6月9日"
+
+
+def test_copy_a_to_c_fills_blank_date_cells_down(tmp_path: Path) -> None:
+    a_path = tmp_path / "A.xlsx"
+    c_path = tmp_path / "C.xlsx"
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet["B1"] = "送货时间"
+    worksheet["C1"] = "型号"
+    worksheet["B2"] = 5.5
+    worksheet["C2"] = "规格A"
+    worksheet["C3"] = "规格B"
+    workbook.save(a_path)
+
+    copy_a_to_c(a_path, c_path, date_column="B", overwrite=True)
+
+    c_workbook = load_workbook(c_path)
+    c_sheet = c_workbook.active
+    assert c_sheet["B2"].value == "5月5日"
+    assert c_sheet["B3"].value == "5月5日"
